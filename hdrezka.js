@@ -331,22 +331,20 @@
     //  КНОПКА НА КАРТОЧКЕ ФИЛЬМА
     // ════════════════════════════════════════
 function addCardButton() {
-    // follow вызывается ОДИН РАЗ при инициализации плагина
     Lampa.Listener.follow('full', function (e) {
         if (e.type !== 'complite') return;
 
-        // ← исправленная строка
-        var render = typeof e.object.render === 'function'
-            ? e.object.render()
-            : e.object.render;
+        // ✅ В этой версии Lampa фильм в e.object.card
+        var movie = e.object.card || e.object.movie || 
+                    (e.object.activity && e.object.activity.movie);
+        if (!movie) return;
 
-        var movie = e.object.activity.movie;
-
-        if (!render || !movie) return;
-        if (render.querySelector('.hd-rezka-btn')) return;
-
-        var btns = render.querySelector('.full-start-new__buttons');
+        // ✅ render не передаётся — берём DOM напрямую
+        var btns = document.querySelector('.full-start-new__buttons');
         if (!btns) return;
+
+        // Не дублировать
+        if (btns.querySelector('.hd-rezka-btn')) return;
 
         var btn = document.createElement('div');
         btn.className = 'full-start__button selector button--hdrezka hd-rezka-btn';
@@ -365,6 +363,7 @@ function addCardButton() {
         else btns.appendChild(btn);
     });
 }
+
 
 
 
