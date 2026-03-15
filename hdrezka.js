@@ -59,21 +59,24 @@ function parseQualities(urlStr) {
     // ════════════════════════════════════════
     //  HTTP-обёртки
     // ════════════════════════════════════════
+
 function get(url, ok, fail) {
     var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
-    // var u = url.replace('https://hdrezka.ag', 'http://localhost:8010/proxy');
     var xhr = new XMLHttpRequest();
     xhr.open('GET', u, true);
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    xhr.setRequestHeader('Referer', HD.base + '/');
     xhr.timeout = 15000;
     xhr.onload = function () {
+        log('GET ' + xhr.status + ' len=' + xhr.responseText.length + ' url=' + u.substring(0, 60));
         if (xhr.status >= 200 && xhr.status < 300) ok(xhr.responseText);
-        else { console.error('[HDRezka] GET status:', xhr.status, u); if (fail) fail(xhr.status); }
+        else { log('GET ошибка статус=' + xhr.status); if (fail) fail(xhr.status); }
     };
-    xhr.onerror   = function (e) { console.error('[HDRezka] GET error:', u, e); if (fail) fail(e); };
-    xhr.ontimeout = function ()  { console.error('[HDRezka] GET timeout:', u);  if (fail) fail('timeout'); };
+    xhr.onerror   = function(e) { log('GET onerror'); if (fail) fail(e); };
+    xhr.ontimeout = function()  { log('GET timeout'); if (fail) fail('timeout'); };
     xhr.send();
 }
+    
 
 function post(path, data, ok, fail) {
     var u = HD.proxy
@@ -112,29 +115,70 @@ function post(path, data, ok, fail) {
     // ════════════════════════════════════════
     //  ПОИСК
     // ════════════════════════════════════════
-    function search(query, done) {
-        var url = HD.base + '/search/?do=search&subaction=search&q=' + encodeURIComponent(query);
-        get(url, function (html) { done(parseSearchHtml(html)); }, function () { done([]); });
-    }
+  function search(query, done) {
+    var url = HD.base + '/search/?do=search&subaction=search&q=' + encodeURIComponent(query);
+    log('Поиск: ' + url);
+    get(url, function (html) {
+        log('Получен HTML длина=' + html.length);
+        var results = parseSearchHtml(html);
+        log('Найдено результатов: ' + results.length);
+        done(results);
+    }, function (e) {
+        log('Ошибка поиска: ' + e);
+        done([]);
+    });
+}
 
-    function parseSearchHtml(html) {
-        var items = [];
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        doc.querySelectorAll('.b-content__inline_item').forEach(function (el) {
-            var titleEl = el.querySelector('.b-content__inline_item-link a');
-            var coverEl = el.querySelector('.b-content__inline_item-cover a');
-            var imgEl   = el.querySelector('img');
-            var miscEl  = el.querySelector('.misc');
-            if (!titleEl) return;
-            items.push({
-                title : titleEl.textContent.trim(),
-                url   : (coverEl || titleEl).getAttribute('href'),
-                poster: imgEl  ? imgEl.getAttribute('src')       : '',
-                info  : miscEl ? miscEl.textContent.trim()        : ''
-            });
+function parseSearchHtml(html) {
+    var items = [];
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // Пробуем все возможные селекторы HDRezka
+    var cards = doc.querySelectorAll('.b-content__inline_item');
+    if (!cards.length) cards = doc.querySelectorAll('.b-content__inline-item');
+    if (!cards.length) cards = doc.querySelectorAll('[data-url]');
+    if (!cards.length) cards = doc.querySelectorAll('.b-post');
+
+    log('Карточки найдены по селектору: ' + cards.length);
+
+    // Если карточек нет — ищем все ссылки на фильмы
+    if (!cards.length) {
+        var links = doc.querySelectorAll('a[href*="' + HD.base + '"]');
+        links.forEach(function(a) {
+            var href = a.getAttribute('href') || '';
+            // Ссылки вида /12345-название/
+            if (/\/\d+-[a-z0-9-]+\/$/.test(href) || /hdrezka\.\w+\/\d+-/.test(href)) {
+                var title = a.textContent.trim();
+                if (title && title.length > 1 && items.length < 15) {
+                    items.push({ title: title, url: href.indexOf('http') === 0 ? href : HD.base + href });
+                }
+            }
         });
+        log('Fallback ссылки: ' + items.length);
         return items;
     }
+
+    cards.forEach(function (el) {
+        var linkEl  = el.querySelector('a') || el;
+        var titleEl = el.querySelector('.b-content__inline_item-link a') ||
+                      el.querySelector('a[class*="title"]') ||
+                      el.querySelector('a');
+        var imgEl   = el.querySelector('img');
+        var miscEl  = el.querySelector('.misc') || el.querySelector('[class*="misc"]');
+
+        var href = linkEl.getAttribute('href') || linkEl.getAttribute('data-url') || '';
+        if (!href) return;
+
+        items.push({
+            title : titleEl ? titleEl.textContent.trim() : (linkEl.textContent.trim() || href),
+            url   : href.indexOf('http') === 0 ? href : HD.base + href,
+            poster: imgEl  ? imgEl.getAttribute('src') : '',
+            info  : miscEl ? miscEl.textContent.trim() : ''
+        });
+    });
+
+    return items;
+}
 
     // ════════════════════════════════════════
     //  СТРАНИЦА ФИЛЬМА / СЕРИАЛА
