@@ -60,7 +60,8 @@ function parseQualities(urlStr) {
     //  HTTP-обёртки
     // ════════════════════════════════════════
 function get(url, ok, fail) {
-    var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
+   // var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
+    var u = url.replace('https://hdrezka.ag', 'http://localhost:8010/proxy');
     var xhr = new XMLHttpRequest();
     xhr.open('GET', u, true);
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
