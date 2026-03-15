@@ -330,22 +330,57 @@
     // ════════════════════════════════════════
     //  КНОПКА НА КАРТОЧКЕ ФИЛЬМА
     // ════════════════════════════════════════
-    function addCardButton() {
-        Lampa.Listener.follow('full', function (e) {
-            if (e.type !== 'complite') return;
-            var render = e.object.render();
-            var movie  = e.object.activity.movie;
-            var btns   = render.querySelector('.full-start__buttons');
-            if (!btns || btns.querySelector('.hd-btn')) return; // не дублировать
+function addCardButton() {
+    Lampa.Listener.follow('full', function (e) {
+        if (e.type !== 'complite') return;
 
+        var render = e.object.render();
+        var movie  = e.object.activity.movie;
+
+        // Не дублировать кнопку
+        if (render.querySelector('.hd-rezka-btn')) return;
+
+        // ── Пробуем разные селекторы (разные версии Lampa) ──
+        var btns = 
+            render.querySelector('.full-start__buttons') ||
+            render.querySelector('.full-start-new__buttons') ||
+            render.querySelector('.view--full .buttons') ||
+            render.querySelector('[class*="full"][class*="button"]');
+
+        if (btns) {
             var btn = document.createElement('div');
-            btn.className = 'full-start__button selector hd-btn';
-            btn.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg><span style="margin-left:8px">HDRezka</span>';
-            btn.style.cssText = 'display:flex;align-items:center;cursor:pointer';
+            btn.className = 'full-start__button selector hd-rezka-btn';
+            btn.setAttribute('tabindex', '0');
+            btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+            btn.title = 'HDRezka';
+            btn.style.cssText = 'position:relative';
+
+            // Подпись под иконкой (как у других кнопок)
+            var label = document.createElement('span');
+            label.style.cssText = 'display:block;font-size:11px;margin-top:4px;text-align:center';
+            label.textContent = 'HDRezka';
+            btn.appendChild(label);
+
             btn.addEventListener('click', function () { openForCard(movie); });
             btns.appendChild(btn);
+            return;
+        }
+
+        // ── Фолбэк: добавляем в меню "..." ──
+        Lampa.Listener.follow('menu', function (me) {
+            if (me.type !== 'open') return;
+            if (me.object && me.object.movie && me.object.movie.id === movie.id) {
+                me.items.push({
+                    title  : '▶ HDRezka',
+                    subtitle: 'Онлайн просмотр',
+                    icon   : 'hd',
+                    action : function () { openForCard(movie); }
+                });
+            }
         });
-    }
+    });
+}
+
 
     // ════════════════════════════════════════
     //  INIT
