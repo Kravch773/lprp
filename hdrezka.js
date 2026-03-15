@@ -79,24 +79,35 @@ function post(path, data, ok, fail) {
     var u = HD.proxy
         ? HD.proxy + encodeURIComponent(HD.base + path)
         : HD.base + path;
+
     var body = Object.keys(data)
-        .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]); })
+        .map(function(k) { return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]); })
         .join('&');
+
     var xhr = new XMLHttpRequest();
     xhr.open('POST', u, true);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    // ← эти два заголовка обязательны для HDRezka AJAX
+    xhr.setRequestHeader('Referer', HD.base + '/');
+    xhr.setRequestHeader('Origin', HD.base);
     xhr.timeout = 15000;
     xhr.onload = function () {
+        log('POST статус: ' + xhr.status + ' длина: ' + xhr.responseText.length);
+        log('RAW: ' + xhr.responseText.substring(0, 120));
         if (xhr.status >= 200 && xhr.status < 300) {
             try { ok(JSON.parse(xhr.responseText)); }
-            catch (e) { console.error('[HDRezka] JSON parse error:', e); if (fail) fail(e); }
-        } else { console.error('[HDRezka] POST status:', xhr.status, u); if (fail) fail(xhr.status); }
+            catch (e) { log('JSON parse ошибка: ' + e); if (fail) fail(e); }
+        } else {
+            log('HTTP ошибка: ' + xhr.status);
+            if (fail) fail(xhr.status);
+        }
     };
-    xhr.onerror   = function (e) { console.error('[HDRezka] POST error:', u, e); if (fail) fail(e); };
-    xhr.ontimeout = function ()  { console.error('[HDRezka] POST timeout:', u);  if (fail) fail('timeout'); };
+    xhr.onerror   = function(e) { log('POST onerror: ' + JSON.stringify(e)); if (fail) fail(e); };
+    xhr.ontimeout = function()  { log('POST timeout!'); if (fail) fail('timeout'); };
     xhr.send(body);
 }
+
 
     // ════════════════════════════════════════
     //  ПОИСК
