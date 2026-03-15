@@ -201,28 +201,42 @@ function getMoviePage(url, done) {
     // ════════════════════════════════════════
 
     /** Стрим для фильма */
- function getMovieStream(id, tId, done) {
-    console.log('[HDRezka] getMovieStream → id:', id, 'translator_id:', tId);
+// Вспомогательная функция для лога через уведомление
+function log(msg) {
+    console.log('[HDRezka]', msg);
+    Lampa.Noty.show('[HD] ' + msg);
+}
+
+function getMovieStream(id, tId, done) {
+    log('id=' + id + ' tr=' + tId);
+
+    if (!id || id === 'null' || id === 'undefined' || !id.toString().trim()) {
+        log('ERROR: movieId пустой!');
+        return done([]);
+    }
+
     post('/ajax/get_cdn_series/', {
         id           : id,
         translator_id: tId,
         action       : 'get_movie'
     }, function (j) {
-        console.log('[HDRezka] AJAX ответ:', j);
-        console.log('[HDRezka] RAW url:', j && j.url);
-        if (j && j.success && j.url) {
+        if (!j) { log('ERROR: пустой ответ'); return done([]); }
+        log('success=' + j.success + ' msg=' + (j.message || '-'));
+        if (j.success && j.url) {
+            log('URL=' + j.url.substring(0, 60));   // первые 60 символов
             var streams = parseQualities(j.url);
-            console.log('[HDRezka] decoded streams:', streams);
+            log('streams=' + streams.length);
             done(streams);
         } else {
-            console.warn('[HDRezka] success=false, message:', j && j.message);
+            log('FAIL: ' + JSON.stringify(j).substring(0, 100));
             done([]);
         }
     }, function (e) {
-        console.error('[HDRezka] POST ошибка:', e);
+        log('POST error: ' + e);
         done([]);
     });
 }
+
 
 
     /** Список сезонов/эпизодов */
