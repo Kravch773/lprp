@@ -16,40 +16,45 @@
     // ════════════════════════════════════════
     var TRASH = ['//_//','////','###','##','**','!!','@@','///','//#','#/','/#','@#v'];
 
-    function clearTrash(s) {
-        TRASH.forEach(function (t) { s = s.split(t).join(''); });
-        return s;
-    }
+ function clearTrash(s) {
+    var trashList = [
+        '//_//','////','###','##','**','!!','@@','///',
+        '//#','#/','/#','@#v','!@','@!','#!','!#',
+        '^^','~~','||','__','€'
+    ];
+    trashList.forEach(function(t) { s = s.split(t).join(''); });
+    s = s.replace(/[^A-Za-z0-9+\/=]/g, ''); // только base64 символы
+    return s;
+}
 
-    function decodeHdUrl(raw) {
-        // Формат из AJAX-ответа: //BASE64ENCODED#HASH
-        var cleaned = raw.replace(/^\/\//, '').split('#')[0];
-        cleaned = clearTrash(cleaned).trim();
-        try { return atob(cleaned); } catch (e) { return ''; }
-    }
+function decodeHdUrl(raw) {
+    raw = raw.trim().replace(/^\/\//, '');
+    raw = raw.split('#')[0].split(' ')[0].split(',')[0];
+    raw = clearTrash(raw);
+    while (raw.length % 4 !== 0) raw += '='; // base64 padding
+    try { return atob(raw); } catch(e) { return ''; }
+}
 
-    /**
-     * Парсит строку качеств:
-     * "[1080p]//enc1 or //enc2,[720p]//enc3"
-     * → [{quality:'1080p', url:'https://...'}, ...]
-     */
-    function parseQualities(urlStr) {
-        if (!urlStr) return [];
-        var result = [];
-        var re = /\[([^\]]+)\]((?:\/\/[^\[,]+?)(?:\s+or\s+\/\/[^\[,]+?)*?)(?=,\[|$)/g;
-        var m;
-        while ((m = re.exec(urlStr)) !== null) {
-            var quality = m[1].trim();
-            var bestUrl = '';
-            m[2].split(' or ').forEach(function (raw) {
-                if (bestUrl) return;          // берём первое зеркало
-                var dec = decodeHdUrl(raw.trim());
-                if (dec && /^https?:/.test(dec)) bestUrl = dec;
-            });
-            if (bestUrl) result.push({ quality: quality, url: bestUrl });
+function parseQualities(urlStr) {
+    if (!urlStr) return [];
+    var result = [];
+    // Разбиваем по запятой перед [качеством]
+    var parts = urlStr.split(/,(?=\[)/);
+    parts.forEach(function(part) {
+        var m = part.match(/\[([^\]]+)\](.*?)(?:\s+or\s+.*)?$/);
+        if (!m) return;
+        var quality = m[1].trim();
+        // Берём первое зеркало (до " or ")
+        var rawUrl = m[2].split(' or ')[0].trim();
+        var decoded = decodeHdUrl(rawUrl);
+        if (decoded && decoded.indexOf('http') === 0) {
+            result.push({ quality: quality, url: decoded });
         }
-        return result.reverse();             // лучшее качество первым
-    }
+    });
+    return result.reverse(); // лучшее качество первым
+}
+
+
 
     // ════════════════════════════════════════
     //  HTTP-обёртки
