@@ -449,46 +449,41 @@
     // ═══════════════════════════════════════════════════════
     //  КНОПКА НА КАРТОЧКЕ ФИЛЬМА
     // ═══════════════════════════════════════════════════════
-    function addCardButton() {
-        Lampa.Listener.follow('full', function (e) {
-            if (e.type !== 'complite') return;
+  function addCardButton() {
+    Lampa.Listener.follow('full', function (e) {
+        if (e.type !== 'complite') return;
 
-            // Фильм: в этой версии Lampa — e.object.card
-            var movie = e.object.card
-                || (e.object.activity && e.object.activity.movie)
-                || e.object.movie;
-            if (!movie) return;
+        var movie = e.object.card
+            || (e.object.activity && e.object.activity.movie)
+            || e.object.movie;
+        if (!movie) return;
 
-            // render: может быть функцией или элементом
-            var render = typeof e.object.render === 'function'
-                ? e.object.render()
-                : e.object.render;
-            if (!render) render = document.querySelector('.full-start');
-            if (!render) return;
+        // Не ищем render вообще — идём прямо в DOM
+        // (в этой версии Lampa .full-start не существует)
+        if (document.querySelector('.hd-rezka-btn')) return;
 
-            if (render.querySelector('.hd-rezka-btn')) return; // не дублируем
+        var btns = document.querySelector('.full-start-new__buttons')
+                || document.querySelector('.full-start__buttons');
+        if (!btns) return;
 
-            var btns = render.querySelector('.full-start-new__buttons')
-                    || render.querySelector('.full-start__buttons');
-            if (!btns) return;
+        var btn = document.createElement('div');
+        btn.className = 'full-start__button selector button--hdrezka hd-rezka-btn';
+        btn.setAttribute('tabindex', '0');
+        btn.innerHTML = [
+            '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">',
+            '<polygon points="5 3 19 12 5 21 5 3"/>',
+            '</svg>',
+            '<div class="full-start__button-name">HDRezka</div>'
+        ].join('');
 
-            var btn = document.createElement('div');
-            btn.className = 'full-start__button selector button--hdrezka hd-rezka-btn';
-            btn.setAttribute('tabindex', '0');
-            btn.innerHTML = [
-                '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">',
-                '<polygon points="5 3 19 12 5 21 5 3"/>',
-                '</svg>',
-                '<div class="full-start__button-name">HDRezka</div>'
-            ].join('');
+        btn.addEventListener('click', function () { openForCard(movie); });
 
-            btn.addEventListener('click', function () { openForCard(movie); });
+        var optBtn = btns.querySelector('.button--options');
+        if (optBtn) btns.insertBefore(btn, optBtn);
+        else        btns.appendChild(btn);
+    });
+}
 
-            var optBtn = btns.querySelector('.button--options');
-            if (optBtn) btns.insertBefore(btn, optBtn);
-            else        btns.appendChild(btn);
-        });
-    }
 
     // ═══════════════════════════════════════════════════════
     //  INIT
