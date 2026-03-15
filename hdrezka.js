@@ -60,8 +60,8 @@ function parseQualities(urlStr) {
     //  HTTP-обёртки
     // ════════════════════════════════════════
 function get(url, ok, fail) {
-   // var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
-    var u = url.replace('https://hdrezka.ag', 'http://localhost:8010/proxy');
+    var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
+    // var u = url.replace('https://hdrezka.ag', 'http://localhost:8010/proxy');
     var xhr = new XMLHttpRequest();
     xhr.open('GET', u, true);
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
@@ -128,44 +128,69 @@ function post(path, data, ok, fail) {
     // ════════════════════════════════════════
     //  СТРАНИЦА ФИЛЬМА / СЕРИАЛА
     // ════════════════════════════════════════
-    function getMoviePage(url, done) {
-        get(url, function (html) {
-            var doc = new DOMParser().parseFromString(html, 'text/html');
 
-            // ID фильма
-            var idEl    = doc.querySelector('#b-content-rating-votes-wrapper,[data-id]');
-            var movieId = idEl ? idEl.getAttribute('data-id') : extractId(url);
+function getMoviePage(url, done) {
+    get(url, function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
 
-            // Тип контента
-            var isSeries = !!(
-                doc.querySelector('.b-content__episode_item') ||
-                doc.querySelector('#simple-episodes-list')
-            );
+        // Пробуем все возможные места где хранится ID
+        var movieId = null;
 
-            // Переводчики
-            var translators = [];
-            doc.querySelectorAll('#translators-list > li[data-translator_id]').forEach(function (li) {
-                translators.push({
-                    id       : li.getAttribute('data-translator_id'),
-                    name     : li.textContent.trim(),
-                    isPremium: li.classList.contains('b-prem_translator')
-                });
+        // Вариант 1: data-id на плеере
+        var p1 = doc.querySelector('#oframecdnplayer');
+        if (p1) movieId = p1.getAttribute('data-id');
+
+        // Вариант 2: data-id на блоке рейтинга
+        if (!movieId) {
+            var p2 = doc.querySelector('[data-id]');
+            if (p2) movieId = p2.getAttribute('data-id');
+        }
+
+        // Вариант 3: из URL  /12345-название/
+        if (!movieId) movieId = extractId(url);
+
+        // Вариант 4: ищем в скриптах страницы (sof.tv_cdn_params)
+        if (!movieId) {
+            var scripts = doc.querySelectorAll('script');
+            scripts.forEach(function(s) {
+                var m = s.textContent.match(/sof\.tv_cdn_params\s*=\s*\{[^}]*"id"\s*:\s*"?(\d+)"?/);
+                if (m) movieId = m[1];
             });
+        }
 
-            // Нет списка — один дефолтный переводчик
-            if (!translators.length) {
-                var pEl = doc.querySelector('#oframecdnplayer');
-                translators.push({
-                    id      : pEl ? (pEl.getAttribute('data-translator_id') || '0') : '0',
-                    name    : 'Оригинал',
-                    isPremium: false
-                });
-            }
+        console.log('[HDRezka] movieId найден:', movieId, 'из URL:', url);
 
-            done({ movieId: movieId, isSeries: isSeries, translators: translators });
-        }, function () { done(null); });
-    }
+        var isSeries = !!(
+            doc.querySelector('.b-content__episode_item') ||
+            doc.querySelector('#simple-episodes-list') ||
+            doc.querySelector('.b-post__schedule')
+        );
 
+        var translators = [];
+        doc.querySelectorAll('#translators-list > li[data-translator_id]').forEach(function (li) {
+            translators.push({
+                id  : li.getAttribute('data-translator_id'),
+                name: li.textContent.trim()
+            });
+        });
+
+        // Дефолтный переводчик из плеера
+        if (!translators.length) {
+            var pl = doc.querySelector('#oframecdnplayer');
+            translators.push({
+                id  : pl ? (pl.getAttribute('data-translator_id') || '0') : '0',
+                name: 'Оригинал'
+            });
+        }
+
+        console.log('[HDRezka] переводчики:', translators);
+        console.log('[HDRezka] isSeries:', isSeries);
+
+        done({ movieId: movieId, isSeries: isSeries, translators: translators });
+    }, function () { done(null); });
+}
+
+    
     function extractId(url) {
         var m = url.match(/\/(\d+)-/);
         return m ? m[1] : '';
@@ -176,12 +201,29 @@ function post(path, data, ok, fail) {
     // ════════════════════════════════════════
 
     /** Стрим для фильма */
-    function getMovieStream(id, tId, done) {
-        post('/ajax/get_cdn_series/', { id: id, translator_id: tId, action: 'get_movie' },
-            function (j) { done(j && j.success ? parseQualities(j.url) : []); },
-            function ()  { done([]); }
-        );
-    }
+ function getMovieStream(id, tId, done) {
+    console.log('[HDRezka] getMovieStream → id:', id, 'translator_id:', tId);
+    post('/ajax/get_cdn_series/', {
+        id           : id,
+        translator_id: tId,
+        action       : 'get_movie'
+    }, function (j) {
+        console.log('[HDRezka] AJAX ответ:', j);
+        console.log('[HDRezka] RAW url:', j && j.url);
+        if (j && j.success && j.url) {
+            var streams = parseQualities(j.url);
+            console.log('[HDRezka] decoded streams:', streams);
+            done(streams);
+        } else {
+            console.warn('[HDRezka] success=false, message:', j && j.message);
+            done([]);
+        }
+    }, function (e) {
+        console.error('[HDRezka] POST ошибка:', e);
+        done([]);
+    });
+}
+
 
     /** Список сезонов/эпизодов */
     function getEpisodeList(id, tId, done) {
