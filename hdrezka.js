@@ -331,20 +331,24 @@
     //  КНОПКА НА КАРТОЧКЕ ФИЛЬМА
     // ════════════════════════════════════════
 function addCardButton() {
+    // follow вызывается ОДИН РАЗ при инициализации плагина
     Lampa.Listener.follow('full', function (e) {
         if (e.type !== 'complite') return;
 
-        var render = e.object.render();
-        var movie  = e.object.activity.movie;
+        // ← исправленная строка
+        var render = typeof e.object.render === 'function'
+            ? e.object.render()
+            : e.object.render;
 
+        var movie = e.object.activity.movie;
+
+        if (!render || !movie) return;
         if (render.querySelector('.hd-rezka-btn')) return;
 
-        // ← точный селектор из твоей консоли
         var btns = render.querySelector('.full-start-new__buttons');
         if (!btns) return;
 
         var btn = document.createElement('div');
-        // ← точный формат классов как у соседних кнопок
         btn.className = 'full-start__button selector button--hdrezka hd-rezka-btn';
         btn.setAttribute('tabindex', '0');
         btn.innerHTML = [
@@ -356,15 +360,12 @@ function addCardButton() {
 
         btn.addEventListener('click', function () { openForCard(movie); });
 
-        // Вставляем перед кнопкой "..." (button--options)
         var optionsBtn = btns.querySelector('.button--options');
-        if (optionsBtn) {
-            btns.insertBefore(btn, optionsBtn);
-        } else {
-            btns.appendChild(btn);
-        }
+        if (optionsBtn) btns.insertBefore(btn, optionsBtn);
+        else btns.appendChild(btn);
     });
 }
+
 
 
     // ════════════════════════════════════════
