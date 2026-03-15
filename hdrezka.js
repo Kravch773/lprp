@@ -1,522 +1,508 @@
 (function () {
     'use strict';
 
-    // ════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════
+    //  UTILS
+    // ═══════════════════════════════════════════════════════
+    function startsWith(str, val) { return str && str.indexOf(val) === 0; }
+
+    function cleanTitle(str) {
+        return (str || '').replace(/[.,!?:;'"]/g, '').replace(/\s+/g, ' ').trim();
+    }
+
+    function fixLink(url, ref) {
+        if (!url) return url;
+        if (startsWith(url, '//')) url = 'https:' + url;
+        if (startsWith(url, '/')) url = ref + url;
+        return url;
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  ПЛАТФОРМА
+    // ═══════════════════════════════════════════════════════
+    var isAndroid = !!(window.Lampa && Lampa.Platform && Lampa.Platform.isandroid);
+
+    // ═══════════════════════════════════════════════════════
     //  КОНФИГУРАЦИЯ
-    // ════════════════════════════════════════
-    var HD = {
-        version : '1.0.0',
-        base    : 'https://hdrezka.ag',
-        proxy   : '',   // задаётся через настройки Lampa
-    };
+    // ═══════════════════════════════════════════════════════
+    var HOST    = 'https://hdrezka.ag';
+    var UA      = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36';
 
-    // ════════════════════════════════════════
-    //  ДЕКОДЕР URL (HDRezka «trash encoding»)
-    //  Сайт кодирует ссылки: base64 + мусорные символы
-    // ════════════════════════════════════════
-    var TRASH = ['//_//','////','###','##','**','!!','@@','///','//#','#/','/#','@#v'];
+    // Заголовки ТОЛЬКО на Android — на PC они вызывают CORS preflight!
+    var HEADERS = isAndroid
+        ? { 'Origin': HOST, 'Referer': HOST + '/', 'User-Agent': UA }
+        : {};
 
- function clearTrash(s) {
-    var trashList = [
-        '//_//','////','###','##','**','!!','@@','///',
-        '//#','#/','/#','@#v','!@','@!','#!','!#',
-        '^^','~~','||','__','€'
-    ];
-    trashList.forEach(function(t) { s = s.split(t).join(''); });
-    s = s.replace(/[^A-Za-z0-9+\/=]/g, ''); // только base64 символы
-    return s;
-}
+    // ═══════════════════════════════════════════════════════
+    //  ДЕКОДЕР URL (HDRezka trash encoding)
+    //  Источник алгоритма: online_mod.js / rezka2
+    // ═══════════════════════════════════════════════════════
+    function _enc(str) {
+        return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function (m, p1) {
+            return String.fromCharCode('0x' + p1);
+        }));
+    }
 
-function decodeHdUrl(raw) {
-    raw = raw.trim().replace(/^\/\//, '');
-    raw = raw.split('#')[0].split(' ')[0].split(',')[0];
-    raw = clearTrash(raw);
-    while (raw.length % 4 !== 0) raw += '='; // base64 padding
-    try { return atob(raw); } catch(e) { return ''; }
-}
+    function _dec(str) {
+        return decodeURIComponent(
+            atob(str).split('').map(function (c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join('')
+        );
+    }
 
-function parseQualities(urlStr) {
-    if (!urlStr) return [];
-    var result = [];
-    // Разбиваем по запятой перед [качеством]
-    var parts = urlStr.split(/,(?=\[)/);
-    parts.forEach(function(part) {
-        var m = part.match(/\[([^\]]+)\](.*?)(?:\s+or\s+.*)?$/);
-        if (!m) return;
-        var quality = m[1].trim();
-        // Берём первое зеркало (до " or ")
-        var rawUrl = m[2].split(' or ')[0].trim();
-        var decoded = decodeHdUrl(rawUrl);
-        if (decoded && decoded.indexOf('http') === 0) {
-            result.push({ quality: quality, url: decoded });
-        }
-    });
-    return result.reverse(); // лучшее качество первым
-}
+    // Мусорные строки (base64-кодируются перед подстановкой)
+    var TRASH = ['!!!', '!!', '!!!', '!!!', '!!!'];
 
+    function decodeStreamUrl(raw) {
+        if (!raw || !startsWith(raw.trim(), '//')) return raw;
+        var x = raw.trim().substring(2);
+        TRASH.forEach(function (t) { x = x.replace(_enc(t), ''); });
+        try { x = _dec(x); } catch (e) { return ''; }
+        return x;
+    }
 
-
-    // ════════════════════════════════════════
-    //  HTTP-обёртки
-    // ════════════════════════════════════════
-
-function get(url, ok, fail) {
-    var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', u, true);
-    // ← НЕ добавляем Referer/Origin — они ломают CORS в браузере
-    xhr.timeout = 15000;
-    xhr.onload = function () {
-        log('GET ' + xhr.status + ' len=' + xhr.responseText.length);
-        if (xhr.status >= 200 && xhr.status < 300) ok(xhr.responseText);
-        else { log('GET err=' + xhr.status); if (fail) fail(xhr.status); }
-    };
-    xhr.onerror   = function(e) { log('GET onerror'); if (fail) fail(e); };
-    xhr.ontimeout = function()  { log('GET timeout'); if (fail) fail('timeout'); };
-    xhr.send();
-}
-
-    
-
-function post(path, data, ok, fail) {
-    var u = HD.proxy
-        ? HD.proxy + encodeURIComponent(HD.base + path)
-        : HD.base + path;
-
-    // Используем FormData — не триггерит CORS preflight
-    var form = new FormData();
-    Object.keys(data).forEach(function(k) { form.append(k, data[k]); });
-
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', u, true);
-    // ← НЕ ставим никаких кастомных заголовков
-    xhr.timeout = 15000;
-    xhr.onload = function () {
-        log('POST ' + xhr.status + ' RAW=' + xhr.responseText.substring(0, 150));
-        if (xhr.status >= 200 && xhr.status < 300) {
-            try { ok(JSON.parse(xhr.responseText)); }
-            catch (e) { log('JSON err: ' + e); if (fail) fail(e); }
-        } else {
-            log('POST HTTP err=' + xhr.status);
-            if (fail) fail(xhr.status);
-        }
-    };
-    xhr.onerror   = function() { log('POST onerror - CORS!'); if (fail) fail('cors'); };
-    xhr.ontimeout = function() { log('POST timeout');         if (fail) fail('timeout'); };
-    xhr.send(form);
-}
-
-
-
-    // ════════════════════════════════════════
-    //  ПОИСК
-    // ════════════════════════════════════════
-  function search(query, done) {
-    var url = HD.base + '/search/?do=search&subaction=search&q=' + encodeURIComponent(query);
-    log('Поиск: ' + url);
-    get(url, function (html) {
-        log('Получен HTML длина=' + html.length);
-        var results = parseSearchHtml(html);
-        log('Найдено результатов: ' + results.length);
-        done(results);
-    }, function (e) {
-        log('Ошибка поиска: ' + e);
-        done([]);
-    });
-}
-
-function parseSearchHtml(html) {
-    var items = [];
-    var doc = new DOMParser().parseFromString(html, 'text/html');
-
-    // Пробуем все возможные селекторы HDRezka
-    var cards = doc.querySelectorAll('.b-content__inline_item');
-    if (!cards.length) cards = doc.querySelectorAll('.b-content__inline-item');
-    if (!cards.length) cards = doc.querySelectorAll('[data-url]');
-    if (!cards.length) cards = doc.querySelectorAll('.b-post');
-
-    log('Карточки найдены по селектору: ' + cards.length);
-
-    // Если карточек нет — ищем все ссылки на фильмы
-    if (!cards.length) {
-        var links = doc.querySelectorAll('a[href*="' + HD.base + '"]');
-        links.forEach(function(a) {
-            var href = a.getAttribute('href') || '';
-            // Ссылки вида /12345-название/
-            if (/\/\d+-[a-z0-9-]+\/$/.test(href) || /hdrezka\.\w+\/\d+-/.test(href)) {
-                var title = a.textContent.trim();
-                if (title && title.length > 1 && items.length < 15) {
-                    items.push({ title: title, url: href.indexOf('http') === 0 ? href : HD.base + href });
-                }
+    // ═══════════════════════════════════════════════════════
+    //  ПАРСЕР ПОТОКОВ "[1080p]//enc1 or //enc2,[720p]//enc3"
+    // ═══════════════════════════════════════════════════════
+    function parseStreamUrls(urlStr) {
+        if (!urlStr) return [];
+        var items = [];
+        var parts = urlStr.split(/,(?=\[)/);
+        parts.forEach(function (part) {
+            var m = part.match(/^\[([^\]]+)\](.+)$/);
+            if (!m) return;
+            var label = m[1].trim();
+            var links = m[2].split(' or ').map(function (u) {
+                return decodeStreamUrl(u.trim());
+            }).filter(function (u) { return u && startsWith(u, 'http'); });
+            if (links.length) {
+                var qMatch  = label.match(/(\d+)/);
+                var qMatchK = label.match(/(\d+)K/i);
+                var quality = NaN;
+                if (qMatchK) quality = parseInt(qMatchK[1]) * 1000;
+                else if (qMatch) quality = parseInt(qMatch[1]);
+                items.push({ label: label, quality: quality, file: links[0] });
             }
         });
-        log('Fallback ссылки: ' + items.length);
+        items.sort(function (a, b) { return b.quality - a.quality; });
         return items;
     }
 
-    cards.forEach(function (el) {
-        var linkEl  = el.querySelector('a') || el;
-        var titleEl = el.querySelector('.b-content__inline_item-link a') ||
-                      el.querySelector('a[class*="title"]') ||
-                      el.querySelector('a');
-        var imgEl   = el.querySelector('img');
-        var miscEl  = el.querySelector('.misc') || el.querySelector('[class*="misc"]');
-
-        var href = linkEl.getAttribute('href') || linkEl.getAttribute('data-url') || '';
-        if (!href) return;
-
-        items.push({
-            title : titleEl ? titleEl.textContent.trim() : (linkEl.textContent.trim() || href),
-            url   : href.indexOf('http') === 0 ? href : HD.base + href,
-            poster: imgEl  ? imgEl.getAttribute('src') : '',
-            info  : miscEl ? miscEl.textContent.trim() : ''
+    // ═══════════════════════════════════════════════════════
+    //  СЕТЬ — Lampa.Reguest (именно так, как в online_mod)
+    // ═══════════════════════════════════════════════════════
+    function get(network, url, ok, fail) {
+        network.clear();
+        network.timeout(10000);
+        network.native(url, ok, fail, false, {
+            dataType: 'text',
+            withCredentials: isAndroid,
+            headers: HEADERS
         });
-    });
+    }
 
-    return items;
-}
+    function post(network, url, data, ok, fail) {
+        network.clear();
+        network.timeout(10000);
+        network.native(url, ok, fail, data, {
+            dataType: 'text',
+            withCredentials: isAndroid,
+            headers: HEADERS
+        });
+    }
 
-    // ════════════════════════════════════════
-    //  СТРАНИЦА ФИЛЬМА / СЕРИАЛА
-    // ════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════
+    //  ПАРСИНГ СТРАНИЦЫ ФИЛЬМА (regex, как в online_mod)
+    // ═══════════════════════════════════════════════════════
+    function extractPageData(str) {
+        var data = {
+            filmId   : null,
+            isSeries : false,
+            voice    : [],
+            season   : [],
+            episode  : [],
+            voiceData: {},
+            favs     : ''
+        };
+        if (!str) return data;
+        str = str.replace(/&nbsp;/g, ' ');
 
-function getMoviePage(url, done) {
-    get(url, function (html) {
+        // ID фильма
+        var cSeries = str.match(/\.initCDNSeriesEvents\((\d+),\s*(\d+)/);
+        var cMovie  = str.match(/\.initCDNMoviesEvents\((\d+),\s*(\d+),\s*([^,]*),\s*([^,]*),\s*([^)]*)/);
+
+        // Имя озвучки по умолчанию
+        var trRow = str.match(/<h2[^>]*>[\s\S]*?<\/h2>[\s\S]*?<td[^>]*>([\s\S]*?)<\/td>/);
+        var defName = trRow ? trRow[1].replace(/<[^>]+>/g, '').trim() : '';
+
+        if (cSeries) {
+            data.isSeries = true;
+            data.filmId   = cSeries[1];
+            var defVoiceS = { name: defName || 'Оригинал', id: cSeries[2] };
+        } else if (cMovie) {
+            data.filmId = cMovie[1];
+            var defVoiceM = {
+                name     : defName || 'Оригинал',
+                id       : cMovie[2],
+                iscamrip : (cMovie[3] || '0').trim(),
+                isads    : (cMovie[4] || '0').trim(),
+                isdirector: (cMovie[5] || '0').trim()
+            };
+        }
+
+        // Список переводчиков
+        var voiceBlock = str.match(/ul\s+id="translators-list"[\s\S]*?<\/ul>/);
+        if (voiceBlock) {
+            var vDoc = new DOMParser().parseFromString(voiceBlock[0], 'text/html');
+            vDoc.querySelectorAll('.b-translator__item').forEach(function (li) {
+                var name = (li.getAttribute('title') || li.textContent || '').trim()
+                    .replace(/<[^>]+>/g, '').trim();
+                data.voice.push({
+                    name      : name || 'Оригинал',
+                    id        : li.getAttribute('data-translator_id') || '0',
+                    iscamrip  : li.getAttribute('data-camrip')   || '0',
+                    isads     : li.getAttribute('data-ads')       || '0',
+                    isdirector: li.getAttribute('data-director')  || '0'
+                });
+            });
+        }
+        if (!data.voice.length) {
+            data.voice.push(cSeries ? defVoiceS : (cMovie ? defVoiceM : { name: 'Оригинал', id: '0' }));
+        }
+
+        // Сезоны / Эпизоды
+        if (data.isSeries) {
+            var sBlock = str.match(/ul\s+id="simple-seasons-tabs"[\s\S]*?<\/ul>/);
+            if (sBlock) {
+                var sDoc = new DOMParser().parseFromString(sBlock[0], 'text/html');
+                sDoc.querySelectorAll('.b-simple_season__item').forEach(function (li) {
+                    data.season.push({ name: li.textContent.trim(), id: li.getAttribute('data-tab_id') });
+                });
+            }
+            var eBlock = str.match(/div\s+id="simple-episodes-tabs"[\s\S]*?<\/div>/);
+            if (eBlock) {
+                var eDoc = new DOMParser().parseFromString(eBlock[0], 'text/html');
+                eDoc.querySelectorAll('.b-simple_episode__item').forEach(function (li) {
+                    data.episode.push({
+                        name      : li.textContent.trim(),
+                        seasonId  : li.getAttribute('data-season_id'),
+                        episodeId : li.getAttribute('data-episode_id')
+                    });
+                });
+            }
+        }
+
+        // favs
+        var favsM = str.match(/input\s+type="hidden"\s+id="ctrl\[favs\]"\s+value="([^"]+)"/);
+        if (favsM) data.favs = favsM[1];
+
+        return data;
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  ПАРСИНГ РЕЗУЛЬТАТОВ ПОИСКА
+    // ═══════════════════════════════════════════════════════
+    function parseSearch(html) {
+        var items = [];
+        if (!html) return items;
         var doc = new DOMParser().parseFromString(html, 'text/html');
-
-        // Пробуем все возможные места где хранится ID
-        var movieId = null;
-
-        // Вариант 1: data-id на плеере
-        var p1 = doc.querySelector('#oframecdnplayer');
-        if (p1) movieId = p1.getAttribute('data-id');
-
-        // Вариант 2: data-id на блоке рейтинга
-        if (!movieId) {
-            var p2 = doc.querySelector('[data-id]');
-            if (p2) movieId = p2.getAttribute('data-id');
-        }
-
-        // Вариант 3: из URL  /12345-название/
-        if (!movieId) movieId = extractId(url);
-
-        // Вариант 4: ищем в скриптах страницы (sof.tv_cdn_params)
-        if (!movieId) {
-            var scripts = doc.querySelectorAll('script');
-            scripts.forEach(function(s) {
-                var m = s.textContent.match(/sof\.tv_cdn_params\s*=\s*\{[^}]*"id"\s*:\s*"?(\d+)"?/);
-                if (m) movieId = m[1];
-            });
-        }
-
-        console.log('[HDRezka] movieId найден:', movieId, 'из URL:', url);
-
-        var isSeries = !!(
-            doc.querySelector('.b-content__episode_item') ||
-            doc.querySelector('#simple-episodes-list') ||
-            doc.querySelector('.b-post__schedule')
-        );
-
-        var translators = [];
-        doc.querySelectorAll('#translators-list > li[data-translator_id]').forEach(function (li) {
-            translators.push({
-                id  : li.getAttribute('data-translator_id'),
-                name: li.textContent.trim()
+        doc.querySelectorAll('.b-content__inline_item').forEach(function (el) {
+            var coverLink = el.querySelector('.b-content__inline_item-cover a');
+            var titleLink = el.querySelector('.b-content__inline_item-link a');
+            var miscEl    = el.querySelector('.misc');
+            if (!coverLink && !titleLink) return;
+            var href  = (coverLink || titleLink).getAttribute('href') || '';
+            var title = titleLink ? titleLink.textContent.trim() : href;
+            var alt   = el.querySelector('a[class*="title"]');
+            var origtitle = '';
+            if (alt) origtitle = alt.textContent.trim();
+            // Год из misc
+            var misc  = miscEl ? miscEl.textContent.trim() : '';
+            var yearM = misc.match(/(\d{4})/);
+            items.push({
+                title    : title,
+                origtitle: origtitle,
+                year     : yearM ? parseInt(yearM[1]) : 0,
+                url      : href,
+                info     : misc
             });
         });
+        return items;
+    }
 
-        // Дефолтный переводчик из плеера
-        if (!translators.length) {
-            var pl = doc.querySelector('#oframecdnplayer');
-            translators.push({
-                id  : pl ? (pl.getAttribute('data-translator_id') || '0') : '0',
-                name: 'Оригинал'
+    // ═══════════════════════════════════════════════════════
+    //  ЭПИЗОДЫ — обновление через AJAX
+    // ═══════════════════════════════════════════════════════
+    function parseEpisodesResponse(json, translatorId) {
+        var data = { season: [], episode: [] };
+        if (json.seasons) {
+            var sDoc = new DOMParser().parseFromString(json.seasons, 'text/html');
+            sDoc.querySelectorAll('.b-simple_season__item').forEach(function (li) {
+                data.season.push({ name: li.textContent.trim(), id: li.getAttribute('data-tab_id') });
             });
         }
-
-        console.log('[HDRezka] переводчики:', translators);
-        console.log('[HDRezka] isSeries:', isSeries);
-
-        done({ movieId: movieId, isSeries: isSeries, translators: translators });
-    }, function () { done(null); });
-}
-
-    
-    function extractId(url) {
-        var m = url.match(/\/(\d+)-/);
-        return m ? m[1] : '';
-    }
-
-    // ════════════════════════════════════════
-    //  AJAX-ЗАПРОСЫ К ПЛЕЕРУ
-    // ════════════════════════════════════════
-
-    /** Стрим для фильма */
-// Вспомогательная функция для лога через уведомление
-function log(msg) {
-    console.log('[HDRezka]', msg);
-    Lampa.Noty.show('[HD] ' + msg);
-}
-
-function getMovieStream(id, tId, done) {
-    log('id=' + id + ' tr=' + tId);
-
-    if (!id || id === 'null' || id === 'undefined' || !id.toString().trim()) {
-        log('ERROR: movieId пустой!');
-        return done([]);
-    }
-
-    post('/ajax/get_cdn_series/', {
-        id           : id,
-        translator_id: tId,
-        action       : 'get_movie'
-    }, function (j) {
-        if (!j) { log('ERROR: пустой ответ'); return done([]); }
-        log('success=' + j.success + ' msg=' + (j.message || '-'));
-        if (j.success && j.url) {
-            log('URL=' + j.url.substring(0, 60));   // первые 60 символов
-            var streams = parseQualities(j.url);
-            log('streams=' + streams.length);
-            done(streams);
-        } else {
-            log('FAIL: ' + JSON.stringify(j).substring(0, 100));
-            done([]);
+        if (json.episodes) {
+            var eDoc = new DOMParser().parseFromString(json.episodes, 'text/html');
+            eDoc.querySelectorAll('.b-simple_episode__item').forEach(function (li) {
+                data.episode.push({
+                    name      : li.textContent.trim(),
+                    translatorId: translatorId,
+                    seasonId  : li.getAttribute('data-season_id'),
+                    episodeId : li.getAttribute('data-episode_id')
+                });
+            });
         }
-    }, function (e) {
-        log('POST error: ' + e);
-        done([]);
-    });
-}
-
-
-
-    /** Список сезонов/эпизодов */
-    function getEpisodeList(id, tId, done) {
-        post('/ajax/get_cdn_series/', { id: id, translator_id: tId, action: 'get_episodes' },
-            function (j) { done(j && j.success ? parseSeasonsEpisodes(j.seasons, j.episodes) : {}); },
-            function ()  { done({}); }
-        );
+        return data;
     }
 
-    /** Стрим конкретного эпизода */
-    function getEpisodeStream(id, tId, season, episode, done) {
-        post('/ajax/get_cdn_series/', {
-                id: id, translator_id: tId,
-                season: season, episode: episode, action: 'get_stream'
+    // ═══════════════════════════════════════════════════════
+    //  ОСНОВНАЯ ЛОГИКА
+    // ═══════════════════════════════════════════════════════
+    function openForCard(movie) {
+        var query = cleanTitle(movie.original_title || movie.originalTitle || movie.title || '');
+        if (!query) return Lampa.Noty.show('HDRezka: нет названия для поиска');
+
+        var network = new Lampa.Reguest();
+        var extract = null;
+
+        Lampa.Noty.show('HDRezka: поиск "' + query + '"...');
+
+        // ── Шаг 1: Поиск ──
+        var searchUrl = HOST + '/engine/ajax/search.php';
+        post(network, searchUrl, 'q=' + encodeURIComponent(query),
+            function (html) {
+                var results = parseSearch(html);
+                if (!results.length) {
+                    // Fallback: GET поиск
+                    get(network,
+                        HOST + '/search/?do=search&subaction=search&q=' + encodeURIComponent(query),
+                        function (html2) { showResults(network, parseSearch(html2), movie, query); },
+                        function ()      { Lampa.Noty.show('HDRezka: ошибка поиска'); network.clear(); }
+                    );
+                } else {
+                    showResults(network, results, movie, query);
+                }
             },
-            function (j) { done(j && j.success ? parseQualities(j.url) : []); },
-            function ()  { done([]); }
+            function () {
+                Lampa.Noty.show('HDRezka: ошибка запроса поиска');
+                network.clear();
+            }
         );
     }
 
-    function parseSeasonsEpisodes(seasonsHtml, episodesHtml) {
-        var res = {};
-        var p = new DOMParser();
-        p.parseFromString(seasonsHtml || '', 'text/html')
-            .querySelectorAll('li[data-tab_id]').forEach(function (li) {
-                res[li.getAttribute('data-tab_id')] = { title: li.textContent.trim(), episodes: [] };
-            });
-        p.parseFromString(episodesHtml || '', 'text/html')
-            .querySelectorAll('li[data-season_id]').forEach(function (li) {
-                var s = li.getAttribute('data-season_id');
-                var e = li.getAttribute('data-episode_id');
-                if (res[s]) res[s].episodes.push({ id: e, title: li.textContent.trim() });
-            });
-        return res;
-    }
-
-    // ════════════════════════════════════════
-    //  UI
-    // ════════════════════════════════════════
-    function notify(msg) { Lampa.Noty.show(msg); }
-
-    function playStreams(streams, title) {
-        if (!streams.length) return notify('HDRezka: потоки не найдены');
+    function showResults(network, results, movie, query) {
+        if (!results.length) {
+            network.clear();
+            return Lampa.Noty.show('HDRezka: ничего не найдено по "' + query + '"');
+        }
         Lampa.Select.show({
-            title   : title || 'Выберите качество',
-            items   : streams.map(function (s) { return { title: s.quality, url: s.url }; }),
+            title   : 'HDRezka — результаты',
+            items   : results.map(function (r) {
+                return { title: r.title + (r.info ? '  (' + r.info + ')' : ''), url: r.url };
+            }),
             onSelect: function (item) {
-                Lampa.Player.play({ url: item.url, title: title || 'HDRezka' });
+                Lampa.Noty.show('HDRezka: загрузка страницы...');
+                // ── Шаг 2: Страница фильма ──
+                var pageUrl = fixLink(item.url, HOST);
+                get(network, pageUrl,
+                    function (html) {
+                        var data = extractPageData(html);
+                        if (!data.filmId) {
+                            network.clear();
+                            return Lampa.Noty.show('HDRezka: не удалось получить ID фильма');
+                        }
+                        // ── Шаг 3: Выбор перевода ──
+                        showVoices(network, data, movie.title || query);
+                    },
+                    function () {
+                        network.clear();
+                        Lampa.Noty.show('HDRezka: ошибка загрузки страницы');
+                    }
+                );
             },
+            onBack: function () { network.clear(); Lampa.Controller.toggle('content'); }
+        });
+    }
+
+    function showVoices(network, data, baseTitle) {
+        if (data.voice.length <= 1) {
+            return loadContent(network, data, data.voice[0] || { id: '0', name: 'Оригинал' }, baseTitle);
+        }
+        Lampa.Select.show({
+            title   : 'Перевод / Озвучка',
+            items   : data.voice.map(function (v) {
+                return { title: v.name || 'Оригинал', voice: v };
+            }),
+            onSelect: function (item) { loadContent(network, data, item.voice, baseTitle); },
             onBack  : function () { Lampa.Controller.toggle('content'); }
         });
     }
 
-    function showEpisodes(movieId, tId, seasons) {
-        var keys = Object.keys(seasons);
-        if (!keys.length) return notify('HDRezka: сезоны не найдены');
+    function loadContent(network, data, voice, baseTitle) {
+        Lampa.Noty.show('HDRezka: загрузка...');
+        if (data.isSeries) {
+            // Загружаем список эпизодов через AJAX
+            var postData = [
+                'id='            + encodeURIComponent(data.filmId),
+                'translator_id=' + encodeURIComponent(voice.id),
+                'favs='          + encodeURIComponent(data.favs),
+                'action=get_episodes'
+            ].join('&');
+            post(network, HOST + '/ajax/get_cdn_series/?t=' + Date.now(), postData,
+                function (resp) {
+                    var json;
+                    try { json = JSON.parse(resp); } catch (e) { }
+                    if (json && json.success) {
+                        var eps = parseEpisodesResponse(json, voice.id);
+                        data.voiceData[voice.id] = eps;
+                        data.season  = eps.season;
+                        data.episode = eps.episode;
+                    }
+                    showSeasons(network, data, voice, baseTitle);
+                },
+                function () { showSeasons(network, data, voice, baseTitle); }
+            );
+        } else {
+            fetchMovieStream(network, data, voice, baseTitle);
+        }
+    }
 
+    function showSeasons(network, data, voice, baseTitle) {
+        if (!data.season.length) return Lampa.Noty.show('HDRezka: сезоны не найдены');
         Lampa.Select.show({
             title   : 'Сезон',
-            items   : keys.map(function (k) { return { title: seasons[k].title, id: k }; }),
-            onSelect: function (season) {
-                var eps = seasons[season.id].episodes;
-                if (!eps.length) return notify('Нет эпизодов');
+            items   : data.season.map(function (s) { return { title: s.name, id: s.id }; }),
+            onSelect: function (seasonItem) {
+                var eps = data.episode.filter(function (e) { return e.seasonId === seasonItem.id; });
+                if (!eps.length) return Lampa.Noty.show('HDRezka: нет эпизодов');
                 Lampa.Select.show({
-                    title   : season.title,
-                    items   : eps.map(function (e) {
-                        return { title: e.title, sid: season.id, eid: e.id };
-                    }),
-                    onSelect: function (ep) {
-                        notify('Загрузка...');
-                        getEpisodeStream(movieId, tId, ep.sid, ep.eid, function (streams) {
-                            playStreams(streams, season.title + ' · ' + ep.title);
-                        });
+                    title   : seasonItem.title,
+                    items   : eps.map(function (e) { return { title: e.name, ep: e }; }),
+                    onSelect: function (epItem) {
+                        Lampa.Noty.show('HDRezka: загрузка эпизода...');
+                        var postData = [
+                            'id='            + encodeURIComponent(data.filmId),
+                            'translator_id=' + encodeURIComponent(voice.id),
+                            'season='        + encodeURIComponent(epItem.ep.seasonId),
+                            'episode='       + encodeURIComponent(epItem.ep.episodeId),
+                            'favs='          + encodeURIComponent(data.favs),
+                            'action=get_stream'
+                        ].join('&');
+                        post(network, HOST + '/ajax/get_cdn_series/?t=' + Date.now(), postData,
+                            function (resp) { handleStreamResponse(resp, baseTitle + ' — ' + seasonItem.title + ' — ' + epItem.title); },
+                            function ()     { Lampa.Noty.show('HDRezka: ошибка загрузки потока'); }
+                        );
                     },
-                    onBack  : function () { Lampa.Controller.toggle('content'); }
+                    onBack: function () { Lampa.Controller.toggle('content'); }
                 });
             },
-            onBack  : function () { Lampa.Controller.toggle('content'); }
+            onBack: function () { Lampa.Controller.toggle('content'); }
         });
     }
 
-    function showTranslators(movieId, translators, isSeries) {
-        if (translators.length <= 1) {
-            return loadContent(movieId, (translators[0] || { id: '0' }).id, isSeries);
+    function fetchMovieStream(network, data, voice, baseTitle) {
+        var postData = [
+            'id='            + encodeURIComponent(data.filmId),
+            'translator_id=' + encodeURIComponent(voice.id),
+            'is_camrip='     + encodeURIComponent(voice.iscamrip   || '0'),
+            'is_ads='        + encodeURIComponent(voice.isads      || '0'),
+            'is_director='   + encodeURIComponent(voice.isdirector || '0'),
+            'favs='          + encodeURIComponent(data.favs),
+            'action=get_movie'
+        ].join('&');
+        post(network, HOST + '/ajax/get_cdn_series/?t=' + Date.now(), postData,
+            function (resp) { handleStreamResponse(resp, baseTitle); },
+            function ()     { Lampa.Noty.show('HDRezka: ошибка загрузки потока'); }
+        );
+    }
+
+    function handleStreamResponse(resp, title) {
+        var json;
+        try { json = JSON.parse(resp); } catch (e) {
+            return Lampa.Noty.show('HDRezka: ошибка разбора ответа');
         }
-        Lampa.Select.show({
-            title   : 'Перевод',
-            items   : translators.map(function (t) {
-                return { title: t.name + (t.isPremium ? ' ★' : ''), id: t.id };
-            }),
-            onSelect: function (item) { loadContent(movieId, item.id, isSeries); },
-            onBack  : function () { Lampa.Controller.toggle('content'); }
+        if (!json || !json.success) {
+            return Lampa.Noty.show('HDRezka: ' + (json && json.message || 'потоки не найдены'));
+        }
+        var streams = parseStreamUrls(json.url);
+        if (!streams.length) return Lampa.Noty.show('HDRezka: не удалось декодировать URL');
+        playStreams(streams, title);
+    }
+
+    function playStreams(streams, title) {
+        var qualityMap = {};
+        streams.forEach(function (s) { qualityMap[s.label] = s.file; });
+        var bestUrl = streams[0].file;
+        Lampa.Player.play({
+            url     : bestUrl,
+            title   : title || 'HDRezka',
+            quality : qualityMap
         });
-    }
-
-    function loadContent(movieId, tId, isSeries) {
-        notify('Загрузка...');
-        if (isSeries) {
-            getEpisodeList(movieId, tId, function (seasons) {
-                showEpisodes(movieId, tId, seasons);
-            });
-        } else {
-            getMovieStream(movieId, tId, function (streams) {
-                playStreams(streams, 'HDRezka');
-            });
+        if (streams.length > 1) {
+            Lampa.Player.playlist(streams.map(function (s) {
+                return { url: s.file, title: s.label };
+            }));
         }
     }
 
-function showSearchResults(results, movie) {
-    if (!results.length) {
-        return Lampa.Noty.show('HDRezka: ничего не найдено для "' + 
-            (movie.original_title || movie.title) + '"');
-    }
-    Lampa.Select.show({
-        title   : 'HDRezka — результаты',
-        items   : results.map(function (r) {
-            return { title: r.title + (r.info ? '  (' + r.info + ')' : ''), url: r.url };
-        }),
-        onSelect: function (item) {
-            log('Выбран: ' + item.url);
-            Lampa.Noty.show('Загрузка страницы...');
-            getMoviePage(item.url, function (info) {
-                if (!info) return Lampa.Noty.show('Ошибка загрузки страницы');
-                showTranslators(info.movieId, info.translators, info.isSeries);
-            });
-        },
-        onBack  : function () { Lampa.Controller.toggle('content'); }
-    });
-}
-
-    // ════════════════════════════════════════
-    //  ТОЧКА ВХОДА
-    // ════════════════════════════════════════
-function openForCard(movie) {
-    // Пробуем original_title, потом title
-    var query = movie.original_title || movie.title || '';
-    if (!query) return Lampa.Noty.show('Нет названия для поиска');
-
-    log('Поиск по: "' + query + '"');
-    Lampa.Noty.show('Поиск на HDRezka...');
-
-    search(query, function(results) {
-        // Если по original_title ничего — пробуем title
-        if (!results.length && movie.title && movie.title !== query) {
-            log('Пробуем title: "' + movie.title + '"');
-            search(movie.title, function(results2) {
-                showSearchResults(results2, movie);
-            });
-        } else {
-            showSearchResults(results, movie);
-        }
-    });
-}
-
-    // ════════════════════════════════════════
-    //  НАСТРОЙКИ (Lampa Settings)
-    // ════════════════════════════════════════
-    function initSettings() {
-        Lampa.SettingsApi.addParam({
-            component: 'network',
-            param    : { name: 'hdrezka_proxy', type: 'input', value: '' },
-            field    : {
-                name       : 'HDRezka — прокси',
-                description: 'http://lampac-host:9118/proxy?url= (нужен вне Android-WebView)'
-            },
-            onChange : function (v) {
-                HD.proxy = v;
-                Lampa.Storage.set('hdrezka_proxy', v);
-            }
-        });
-        HD.proxy = Lampa.Storage.get('hdrezka_proxy', '');
-    }
-
-    // ════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════
     //  КНОПКА НА КАРТОЧКЕ ФИЛЬМА
-    // ════════════════════════════════════════
-function addCardButton() {
-    Lampa.Listener.follow('full', function (e) {
-        if (e.type !== 'complite') return;
+    // ═══════════════════════════════════════════════════════
+    function addCardButton() {
+        Lampa.Listener.follow('full', function (e) {
+            if (e.type !== 'complite') return;
 
-        // ✅ В этой версии Lampa фильм в e.object.card
-        var movie = e.object.card || e.object.movie || 
-                    (e.object.activity && e.object.activity.movie);
-        if (!movie) return;
+            // Фильм: в этой версии Lampa — e.object.card
+            var movie = e.object.card
+                || (e.object.activity && e.object.activity.movie)
+                || e.object.movie;
+            if (!movie) return;
 
-        // ✅ render не передаётся — берём DOM напрямую
-        var btns = document.querySelector('.full-start-new__buttons');
-        if (!btns) return;
+            // render: может быть функцией или элементом
+            var render = typeof e.object.render === 'function'
+                ? e.object.render()
+                : e.object.render;
+            if (!render) render = document.querySelector('.full-start');
+            if (!render) return;
 
-        // Не дублировать
-        if (btns.querySelector('.hd-rezka-btn')) return;
+            if (render.querySelector('.hd-rezka-btn')) return; // не дублируем
 
-        var btn = document.createElement('div');
-        btn.className = 'full-start__button selector button--hdrezka hd-rezka-btn';
-        btn.setAttribute('tabindex', '0');
-        btn.innerHTML = [
-            '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">',
-            '<polygon points="5 3 19 12 5 21 5 3"/>',
-            '</svg>',
-            '<div class="full-start__button-name">HDRezka</div>'
-        ].join('');
+            var btns = render.querySelector('.full-start-new__buttons')
+                    || render.querySelector('.full-start__buttons');
+            if (!btns) return;
 
-        btn.addEventListener('click', function () { openForCard(movie); });
+            var btn = document.createElement('div');
+            btn.className = 'full-start__button selector button--hdrezka hd-rezka-btn';
+            btn.setAttribute('tabindex', '0');
+            btn.innerHTML = [
+                '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">',
+                '<polygon points="5 3 19 12 5 21 5 3"/>',
+                '</svg>',
+                '<div class="full-start__button-name">HDRezka</div>'
+            ].join('');
 
-        var optionsBtn = btns.querySelector('.button--options');
-        if (optionsBtn) btns.insertBefore(btn, optionsBtn);
-        else btns.appendChild(btn);
-    });
-}
+            btn.addEventListener('click', function () { openForCard(movie); });
 
-
-
-
-    // ════════════════════════════════════════
-    //  INIT
-    // ════════════════════════════════════════
-    function init() {
-        initSettings();
-        addCardButton();
-        console.log('[HDRezka Plugin] v' + HD.version + ' загружен');
+            var optBtn = btns.querySelector('.button--options');
+            if (optBtn) btns.insertBefore(btn, optBtn);
+            else        btns.appendChild(btn);
+        });
     }
 
-    // Ждём готовности Lampa
+    // ═══════════════════════════════════════════════════════
+    //  INIT
+    // ═══════════════════════════════════════════════════════
+    function init() {
+        addCardButton();
+        console.log('[HDRezka] v2.0 loaded | platform: ' + (isAndroid ? 'Android' : 'PC/TV'));
+    }
+
     if (window.Lampa && Lampa.Listener) {
         init();
     } else {
-        var t = setInterval(function () {
-            if (window.Lampa && Lampa.Listener) { clearInterval(t); init(); }
+        var _t = setInterval(function () {
+            if (window.Lampa && Lampa.Listener) { clearInterval(_t); init(); }
         }, 300);
     }
 
