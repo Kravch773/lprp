@@ -64,18 +64,18 @@ function get(url, ok, fail) {
     var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
     var xhr = new XMLHttpRequest();
     xhr.open('GET', u, true);
-    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-    xhr.setRequestHeader('Referer', HD.base + '/');
+    // ← НЕ добавляем Referer/Origin — они ломают CORS в браузере
     xhr.timeout = 15000;
     xhr.onload = function () {
-        log('GET ' + xhr.status + ' len=' + xhr.responseText.length + ' url=' + u.substring(0, 60));
+        log('GET ' + xhr.status + ' len=' + xhr.responseText.length);
         if (xhr.status >= 200 && xhr.status < 300) ok(xhr.responseText);
-        else { log('GET ошибка статус=' + xhr.status); if (fail) fail(xhr.status); }
+        else { log('GET err=' + xhr.status); if (fail) fail(xhr.status); }
     };
     xhr.onerror   = function(e) { log('GET onerror'); if (fail) fail(e); };
     xhr.ontimeout = function()  { log('GET timeout'); if (fail) fail('timeout'); };
     xhr.send();
 }
+
     
 
 function post(path, data, ok, fail) {
@@ -401,33 +401,51 @@ function getMovieStream(id, tId, done) {
         }
     }
 
-    function showSearchResults(results) {
-        if (!results.length) return notify('HDRezka: ничего не найдено');
-        Lampa.Select.show({
-            title   : 'HDRezka — результаты',
-            items   : results.map(function (r) {
-                return { title: r.title + (r.info ? '  (' + r.info + ')' : ''), url: r.url };
-            }),
-            onSelect: function (item) {
-                notify('Загрузка страницы...');
-                getMoviePage(item.url, function (info) {
-                    if (!info) return notify('Ошибка загрузки страницы');
-                    showTranslators(info.movieId, info.translators, info.isSeries);
-                });
-            },
-            onBack  : function () { Lampa.Controller.toggle('content'); }
-        });
+function showSearchResults(results, movie) {
+    if (!results.length) {
+        return Lampa.Noty.show('HDRezka: ничего не найдено для "' + 
+            (movie.original_title || movie.title) + '"');
     }
+    Lampa.Select.show({
+        title   : 'HDRezka — результаты',
+        items   : results.map(function (r) {
+            return { title: r.title + (r.info ? '  (' + r.info + ')' : ''), url: r.url };
+        }),
+        onSelect: function (item) {
+            log('Выбран: ' + item.url);
+            Lampa.Noty.show('Загрузка страницы...');
+            getMoviePage(item.url, function (info) {
+                if (!info) return Lampa.Noty.show('Ошибка загрузки страницы');
+                showTranslators(info.movieId, info.translators, info.isSeries);
+            });
+        },
+        onBack  : function () { Lampa.Controller.toggle('content'); }
+    });
+}
 
     // ════════════════════════════════════════
     //  ТОЧКА ВХОДА
     // ════════════════════════════════════════
-    function openForCard(movie) {
-        var query = movie.original_title || movie.title || '';
-        if (!query) return notify('Нет названия для поиска');
-        notify('Поиск на HDRezka...');
-        search(query, showSearchResults);
-    }
+function openForCard(movie) {
+    // Пробуем original_title, потом title
+    var query = movie.original_title || movie.title || '';
+    if (!query) return Lampa.Noty.show('Нет названия для поиска');
+
+    log('Поиск по: "' + query + '"');
+    Lampa.Noty.show('Поиск на HDRezka...');
+
+    search(query, function(results) {
+        // Если по original_title ничего — пробуем title
+        if (!results.length && movie.title && movie.title !== query) {
+            log('Пробуем title: "' + movie.title + '"');
+            search(movie.title, function(results2) {
+                showSearchResults(results2, movie);
+            });
+        } else {
+            showSearchResults(results, movie);
+        }
+    });
+}
 
     // ════════════════════════════════════════
     //  НАСТРОЙКИ (Lampa Settings)
