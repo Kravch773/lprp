@@ -54,39 +54,43 @@
     // ════════════════════════════════════════
     //  HTTP-обёртки
     // ════════════════════════════════════════
-    function get(url, ok, fail) {
-        var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
-        Lampa.Ajax.native({
-            url    : u,
-            method : 'GET',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            timeout: 15000,
-            success: ok,
-            error  : fail || function () {}
-        });
-    }
+function get(url, ok, fail) {
+    var u = HD.proxy ? HD.proxy + encodeURIComponent(url) : url;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', u, true);
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    xhr.timeout = 15000;
+    xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) ok(xhr.responseText);
+        else { console.error('[HDRezka] GET status:', xhr.status, u); if (fail) fail(xhr.status); }
+    };
+    xhr.onerror   = function (e) { console.error('[HDRezka] GET error:', u, e); if (fail) fail(e); };
+    xhr.ontimeout = function ()  { console.error('[HDRezka] GET timeout:', u);  if (fail) fail('timeout'); };
+    xhr.send();
+}
 
-    function post(path, data, ok, fail) {
-        var body = Object.keys(data)
-            .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]); })
-            .join('&');
-        var u = HD.proxy ? HD.proxy + encodeURIComponent(HD.base + path) : HD.base + path;
-        Lampa.Ajax.native({
-            url    : u,
-            method : 'POST',
-            headers: {
-                'Content-Type'     : 'application/x-www-form-urlencoded',
-                'X-Requested-With' : 'XMLHttpRequest'
-            },
-            data   : body,
-            timeout: 15000,
-            success: function (r) {
-                try { ok(typeof r === 'string' ? JSON.parse(r) : r); }
-                catch (e) { if (fail) fail(e); }
-            },
-            error: fail || function () {}
-        });
-    }
+function post(path, data, ok, fail) {
+    var u = HD.proxy
+        ? HD.proxy + encodeURIComponent(HD.base + path)
+        : HD.base + path;
+    var body = Object.keys(data)
+        .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]); })
+        .join('&');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', u, true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    xhr.timeout = 15000;
+    xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            try { ok(JSON.parse(xhr.responseText)); }
+            catch (e) { console.error('[HDRezka] JSON parse error:', e); if (fail) fail(e); }
+        } else { console.error('[HDRezka] POST status:', xhr.status, u); if (fail) fail(xhr.status); }
+    };
+    xhr.onerror   = function (e) { console.error('[HDRezka] POST error:', u, e); if (fail) fail(e); };
+    xhr.ontimeout = function ()  { console.error('[HDRezka] POST timeout:', u);  if (fail) fail('timeout'); };
+    xhr.send(body);
+}
 
     // ════════════════════════════════════════
     //  ПОИСК
