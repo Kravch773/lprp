@@ -1313,7 +1313,10 @@
       this.sources_key = 'BO_SOURCES';
       this.sources_sort_key = 'BO_SOURCES_SORT';
       this.sources_hide_key = 'BO_SOURCES_HIDE';
-      this.available_sources = Lampa.Storage.get(this.sources_key, []);
+      this.available_sources = (Lampa.Storage.get(this.sources_key, []) || []).filter(function (item) {
+        var key = ((item && (item.key || item.name)) || '').toString().trim().toLowerCase();
+        return key === 'uaflix' || key === 'eneyida';
+      });
       this.titles = {};
       this.applyTitles(this.available_sources);
     }
@@ -1422,6 +1425,211 @@
     return Lampa.Utils.hash(season ? [season, episode, title, vn].join('') : title + vn);
   }
 
+  function openSiteFrame(url) {
+    $('.online-ua-frame').remove();
+    var root = $('<div class="online-ua-frame"></div>');
+    root.css({
+      position: 'fixed',
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 99999,
+      background: '#000'
+    });
+    var frame = $('<iframe allowfullscreen></iframe>');
+    frame.attr({
+      src: url,
+      allow: 'autoplay; fullscreen; encrypted-media; picture-in-picture'
+    });
+    frame.css({
+      width: '100%',
+      height: '100%',
+      border: 0,
+      display: 'block'
+    });
+    var close = $('<div class="selector online-ua-frame__close">Закрити</div>');
+    close.css({
+      position: 'absolute',
+      top: '1em',
+      right: '1em',
+      zIndex: 2,
+      padding: '0.6em 1em',
+      background: 'rgba(0,0,0,.7)',
+      color: '#fff',
+      borderRadius: '0.4em'
+    });
+    root.append(frame).append(close);
+    $('body').append(root);
+    var prev = 'content';
+    try {
+      prev = Lampa.Controller.enabled().name || 'content';
+    } catch (e) {}
+    function shut() {
+      root.remove();
+      Lampa.Controller.toggle(prev);
+    }
+    close.on('hover:enter click', shut);
+    Lampa.Controller.add('online_ua_frame', {
+      toggle: function toggle() {
+        Lampa.Controller.collectionSet(root);
+        Lampa.Controller.collectionFocus(close[0], root);
+      },
+      back: shut
+    });
+    Lampa.Controller.toggle('online_ua_frame');
+  }
+  function createEneyida(component, _object) {
+    var net = new Lampa.Reguest();
+    var object = _object;
+    var HOST = 'https://eneyida.tv';
+    function useful(str) {
+      str = str || '';
+      if (str.indexOf('Just a moment') !== -1 || str.indexOf('_cf_chl_opt') !== -1) return false;
+      return str.indexOf('short_title') !== -1 || str.indexOf('hdvbua.pro/embed') !== -1 || str.indexOf('article class="short') !== -1;
+    }
+    function getText(url, ok, fail) {
+      var targets = [url, 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url), 'https://cors.redoc.ly/' + url];
+      var i = 0;
+      function next() {
+        if (i >= targets.length) {
+          fail();
+          return;
+        }
+        var target = targets[i++];
+        net.clear();
+        net.timeout(12000);
+        net.native(target, function (str) {
+          if (!useful(str) && i < targets.length) {
+            next();
+            return;
+          }
+          if (!useful(str)) {
+            fail();
+            return;
+          }
+          ok(str);
+        }, function () {
+          next();
+        }, false, {
+          dataType: 'text'
+        });
+      }
+      next();
+    }
+    function parseCards(html) {
+      var out = [];
+      var seen = {};
+      try {
+        var dom = $('<div>' + (html || '').replace(/\n/g, '') + '</div>');
+        dom.find('article.short, .short_in').each(function () {
+          var box = $(this);
+          var link = box.find('a.short_title').first();
+          var href = link.attr('href') || box.find('a.short_img').attr('href') || '';
+          if (!/\/\d+-[^\/?#]+\.html$/i.test(href) || seen[href]) return;
+          seen[href] = 1;
+          var title = (link.text() || box.find('a.short_img').attr('title') || '').replace(/\s+/g, ' ').trim();
+          var sub = (box.find('.short_subtitle').text() || '').replace(/\s+/g, ' ').trim();
+          var year = (sub.match(/\b(19|20)\d{2}\b/) || [])[0] || '';
+          var orig = sub.split('\u2022').pop() || '';
+          orig = orig.replace(/^[\s\u00b7•]+/, '').trim();
+          if (!orig || orig === year || orig === title) orig = '';
+          if (title) out.push({
+            title: title,
+            orig: orig,
+            year: year,
+            href: href
+          });
+        });
+      } catch (e) {}
+      return out;
+    }
+    function showCards(cards) {
+      if (!cards.length) {
+        component.empty();
+        return;
+      }
+      component.similars(cards.map(function (card) {
+        return {
+          title: card.title,
+          orig_title: card.orig,
+          year: card.year,
+          source: 'eneyida',
+          ref: {
+            href: card.href,
+            title: card.title
+          }
+        };
+      }));
+      component.loading(false);
+    }
+    function loadPage(href, title) {
+      component.loading(true);
+      getText(href, function (html) {
+        var embed = html.match(/<iframe[^>]+src=["'](https?:\/\/hdvbua\.pro\/embed\/[^"']+)["']/i);
+        if (!embed) {
+          component.empty();
+          return;
+        }
+        component.similars([{
+          title: title || 'Дивитись',
+          source: 'eneyida',
+          ref: {
+            iframe: embed[1],
+            href: href
+          }
+        }]);
+        component.loading(false);
+      }, function () {
+        component.doesNotAnswer();
+      });
+    }
+    function doSearch(title) {
+      title = (title || '').trim();
+      if (!title) {
+        component.empty();
+        return;
+      }
+      component.loading(true);
+      var url = HOST + '/index.php?do=search&subaction=search&search_start=0&full_search=0&story=' + encodeURIComponent(title);
+      getText(url, function (html) {
+        var cards = parseCards(html);
+        if (cards.length === 1) loadPage(cards[0].href, cards[0].title);else showCards(cards);
+      }, function () {
+        component.doesNotAnswer();
+      });
+    }
+    this.searchByTitle = function (obj, title) {
+      object = obj;
+      doSearch(title);
+    };
+    this.search = function (obj, data) {
+      object = obj;
+      var first = data && data[0] || {};
+      if (first.ref && first.ref.iframe) {
+        openSiteFrame(first.ref.iframe);
+        component.loading(false);
+        return;
+      }
+      if (first.ref && first.ref.href) {
+        loadPage(first.ref.href, first.ref.title || first.title);
+        return;
+      }
+      doSearch(first.title || object.movie && (object.movie.title || object.movie.name) || '');
+    };
+    this.extendChoice = function () {};
+    this.reset = function () {
+      component.reset();
+      doSearch(object.movie && (object.movie.title || object.movie.name) || object.search || '');
+    };
+    this.filter = function () {};
+    this.cancel = function () {
+      net.clear();
+    };
+    this.destroy = function () {
+      net.clear();
+    };
+  }
   function component(object) {
     var api_client = new APIClient();
     this.api_client = api_client;
@@ -1433,6 +1641,11 @@
     var filter = new Lampa.Filter(object);
     var sources = {};
     function ensureSource(key) {
+      if (key === 'eneyida') {
+        sourcesStore.titles.eneyida = 'Eneyida';
+        if (!sources[key]) sources[key] = createEneyida;
+        return sources[key];
+      }
       if (key && !sources[key]) {
         sources[key] = createV2(key);
       }
@@ -1522,6 +1735,11 @@
       }
       sources = filterEnabledSources(sources);
       sources = sourcesStore.applyUserFilters(sources);
+      sources = sources.filter(function (name) {
+        return name === 'uaflix' || name === 'eneyida';
+      });
+      if (sources.indexOf('uaflix') === -1) sources.unshift('uaflix');
+      if (sources.indexOf('eneyida') === -1) sources.push('eneyida');
       return sources;
     }
     function getBaseSources() {
@@ -1556,7 +1774,7 @@
       api_client.getSources(function (json) {
         if (json && json.ok && Array.isArray(json.sources)) {
           applyAvailableSources(json.sources);
-          sourcesStore.saveAvailable(json.sources);
+          sourcesStore.saveAvailable(available_sources);
         } else if (cached && Array.isArray(cached)) {
           applyAvailableSources(cached);
         }
@@ -1567,6 +1785,19 @@
       });
     }
     function applyAvailableSources(list) {
+      list = (list || []).filter(function (item) {
+        var key = sourcesStore.normalizeName(item && (item.key || item.name));
+        return key === 'uaflix' || key === 'eneyida';
+      });
+      if (!list.some(function (item) {
+        return sourcesStore.normalizeName(item && (item.key || item.name)) === 'eneyida';
+      })) {
+        list.push({
+          key: 'eneyida',
+          name: 'Eneyida',
+          enabled: true
+        });
+      }
       available_sources = list;
       list.forEach(function (item) {
         if (!item || !item.name && !item.key) return;
@@ -1680,7 +1911,7 @@
         balanser = last_select_balanser[object.movie.id];
         Lampa.Storage.set('bandera_online_last_balanser', last_select_balanser);
       } else {
-        balanser = Lampa.Storage.get('bandera_online_balanser', 'uatut');
+        balanser = Lampa.Storage.get('bandera_online_balanser', 'uaflix');
       }
       if (!ensureSource(balanser) || filter_sources.indexOf(balanser) === -1) {
         balanser = filter_sources[0] || '';
@@ -3057,7 +3288,7 @@
     var manifest = {
       type: 'video',
       version: '2.9.2',
-      name: '[Free] Bandera Online',
+      name: 'Онлайн UA',
       //description: 'Плагин для просмотра онлайн сериалов и фильмов',
       component: 'bandera_online',
       onContextMenu: function onContextMenu(object) {
@@ -3210,10 +3441,10 @@
         zh: '平衡器将在<span class="timeout">10</span>秒内自动切换。'
       },
       bandera_online_settings_title: {
-        ru: 'Bandera Online',
-        uk: 'Bandera Online',
-        ua: 'Bandera Online',
-        en: 'Bandera Online'
+        ru: 'Онлайн UA',
+        uk: 'Онлайн UA',
+        ua: 'Онлайн UA',
+        en: 'Онлайн UA'
       },
       bandera_online_settings_thanks: {
         ru: 'Подяка',
@@ -3413,7 +3644,7 @@
     if (!$('#bandera_online_style').length) {
       $('body').append(Lampa.Template.get('bandera_online_css', {}, true));
     }
-    var button = "<div class=\"full-start__button selector view--online view--bandera-online\" data-subtitle=\"[Free] Bandera Online v".concat(manifest.version, "\">\n        <svg viewBox=\"0 -4 28 28\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><g id=\"SVGRepo_bgCarrier\" stroke-width=\"0\"></g><g id=\"SVGRepo_tracerCarrier\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></g><g id=\"SVGRepo_iconCarrier\"> <g clip-path=\"url(#clip0_503_2809)\"> <rect width=\"28\" height=\"20\" rx=\"2\" fill=\"white\"></rect> <mask id=\"mask0_503_2809\" style=\"mask-type:alpha\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"28\" height=\"20\"> <rect width=\"28\" height=\"20\" rx=\"2\" fill=\"white\"></rect> </mask> <g mask=\"url(#mask0_503_2809)\"> <path fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M0 10.6667H28V0H0V10.6667Z\" fill=\"#156DD1\"></path> <path fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M0 20H28V10.6667H0V20Z\" fill=\"#FFD948\"></path> </g> </g> <defs> <clipPath id=\"clip0_503_2809\"> <rect width=\"28\" height=\"20\" rx=\"2\" fill=\"white\"></rect> </clipPath> </defs> </g></svg>\n        <span>\u0421\u043F\u0456\u043B\u044C\u043D\u043E\u0442\u0430 t.me/mmssixxx</span>\n    </div>");
+    var button = "<div class=\"full-start__button selector view--online view--bandera-online\" data-subtitle=\"Онлайн UA v".concat(manifest.version, "\">\n        <svg viewBox=\"0 -4 28 28\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><g id=\"SVGRepo_bgCarrier\" stroke-width=\"0\"></g><g id=\"SVGRepo_tracerCarrier\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></g><g id=\"SVGRepo_iconCarrier\"> <g clip-path=\"url(#clip0_503_2809)\"> <rect width=\"28\" height=\"20\" rx=\"2\" fill=\"white\"></rect> <mask id=\"mask0_503_2809\" style=\"mask-type:alpha\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"28\" height=\"20\"> <rect width=\"28\" height=\"20\" rx=\"2\" fill=\"white\"></rect> </mask> <g mask=\"url(#mask0_503_2809)\"> <path fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M0 10.6667H28V0H0V10.6667Z\" fill=\"#156DD1\"></path> <path fill-rule=\"evenodd\" clip-rule=\"evenodd\" d=\"M0 20H28V10.6667H0V20Z\" fill=\"#FFD948\"></path> </g> </g> <defs> <clipPath id=\"clip0_503_2809\"> <rect width=\"28\" height=\"20\" rx=\"2\" fill=\"white\"></rect> </clipPath> </defs> </g></svg>\n        <span>Онлайн UA</span>\n    </div>");
     Lampa.Component.add('bandera_online', component);
     resetTemplates();
     Lampa.Listener.follow('full', function (e) {
@@ -3426,7 +3657,7 @@
           Lampa.Component.add('bandera_online', component);
           Lampa.Activity.push({
             url: '',
-            title: "Спільнота - t.me/mmssixxx",
+            title: 'Онлайн UA',
             component: 'bandera_online',
             search: e.data.movie.title,
             search_one: e.data.movie.title,
