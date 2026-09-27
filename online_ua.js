@@ -1483,10 +1483,17 @@
     var net = new Lampa.Reguest();
     var object = _object;
     var HOST = 'https://eneyida.tv';
+    var choice = {
+      season: 0,
+      voice: 0,
+      voice_name: ''
+    };
+    var voices = [];
     function useful(str) {
       str = str || '';
       if (str.indexOf('Just a moment') !== -1 || str.indexOf('_cf_chl_opt') !== -1) return false;
-      return str.indexOf('short_title') !== -1 || str.indexOf('hdvbua.pro/embed') !== -1 || str.indexOf('article class="short') !== -1;
+      if (str.indexOf('Контент недоступний') !== -1 || str.indexOf('error code:') !== -1) return false;
+      return str.indexOf('short_title') !== -1 || str.indexOf('hdvbua.pro/embed') !== -1 || str.indexOf('Playerjs') !== -1 || str.indexOf('article class="short') !== -1;
     }
     function hasNative() {
       try {
@@ -1498,27 +1505,212 @@
     function searchUrl(title) {
       return HOST + '/index.php?do=search&subaction=search&search_start=0&full_search=0&story=' + encodeURIComponent(title);
     }
-    function showSite(title) {
-      var url = searchUrl(title);
-      component.similars([{
-        title: title,
-        orig_title: 'Eneyida',
-        source: 'eneyida',
-        ref: {
-          iframe: url
-        }
-      }]);
-      component.loading(false);
-      openSiteFrame(url);
-    }
     function getText(url, ok, fail) {
-      net.clear();
-      net.timeout(20000);
-      net.native(url, function (str) {
-        if (!useful(str)) fail();else ok(str);
-      }, fail, false, {
-        dataType: 'text'
+      var targets = [];
+      if (hasNative()) targets.push(url);
+      targets.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
+      if (url.indexOf('hdvbua.pro') === -1 && !/\.html(\?|$)/i.test(url)) {
+        targets.push('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+      }
+      var i = 0;
+      function next() {
+        if (i >= targets.length) {
+          fail();
+          return;
+        }
+        var target = targets[i++];
+        net.clear();
+        net.timeout(8000);
+        net.native(target, function (str) {
+          if (!useful(str)) {
+            if (i < targets.length) next();else fail();
+            return;
+          }
+          ok(str);
+        }, function () {
+          next();
+        }, false, {
+          dataType: 'text'
+        });
+      }
+      next();
+    }
+    function numFrom(title) {
+      var found = (title || '').match(/(\d+)/);
+      return found ? parseInt(found[1], 10) : 0;
+    }
+    function parsePlaylist(html) {
+      var raw = '';
+      var listed = html.match(/file:\s*'(\[[\s\S]*?\])'/);
+      if (!listed) listed = html.match(/file:\s*"(\[[\s\S]*?\])"/);
+      if (listed) raw = listed[1];
+      var data = null;
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          data = null;
+        }
+      }
+      var groups = {};
+      function add(voice, item) {
+        voice = voice || 'Eneyida';
+        if (!groups[voice]) groups[voice] = [];
+        groups[voice].push(item);
+      }
+      function walk(node, season, voice) {
+        if (!node) return;
+        if (typeof node === 'string') {
+          add(voice, {
+            season: season || 0,
+            episode: 0,
+            file: node,
+            title: 'Дивитись',
+            subtitle: ''
+          });
+          return;
+        }
+        if (Array.isArray(node)) {
+          node.forEach(function (item) {
+            walk(item, season, voice);
+          });
+          return;
+        }
+        if (node.file && !node.folder) {
+          add(voice, {
+            season: season || 0,
+            episode: numFrom(node.title),
+            file: node.file,
+            title: node.title || 'Дивитись',
+            subtitle: /^https?:/i.test(node.subtitle || '') ? node.subtitle : ''
+          });
+          return;
+        }
+        if (node.folder) {
+          var title = node.title || '';
+          if (/сезон/i.test(title)) walk(node.folder, numFrom(title) || season, voice);else walk(node.folder, season, title || voice);
+        }
+      }
+      if (data) walk(data, 0, '');else {
+        var one = html.match(/file:\s*["'](https?:[^"']+)["']/);
+        if (one) add('', {
+          season: 0,
+          episode: 0,
+          file: one[1],
+          title: 'Дивитись',
+          subtitle: ''
+        });
+      }
+      return Object.keys(groups).map(function (name) {
+        return {
+          name: name,
+          episodes: groups[name]
+        };
       });
+    }
+    function applyChoice() {
+      var items = {
+        season: [],
+        voice: voices.map(function (voice) {
+          return voice.name;
+        })
+      };
+      if (choice.voice >= voices.length) choice.voice = 0;
+      var voice = voices[choice.voice];
+      var seasons = [];
+      if (voice) {
+        voice.episodes.forEach(function (ep) {
+          if (ep.season && seasons.indexOf(ep.season) === -1) seasons.push(ep.season);
+        });
+      }
+      seasons.sort(function (a, b) {
+        return a - b;
+      });
+      items.season = seasons.map(function (n) {
+        return Lampa.Lang.translate('torrent_serial_season') + ' ' + n;
+      });
+      if (choice.season >= items.season.length) choice.season = 0;
+      choice.voice_name = voice ? voice.name : '';
+      component.filter(items, choice);
+      return {
+        voice: voice,
+        seasons: seasons
+      };
+    }
+    function showEpisodes() {
+      var pack = applyChoice();
+      if (!pack.voice || !pack.voice.episodes.length) {
+        component.empty();
+        return;
+      }
+      var season = pack.seasons.length ? pack.seasons[choice.season] || pack.seasons[0] : 0;
+      var list = pack.voice.episodes.filter(function (ep) {
+        return !season || ep.season === season;
+      });
+      if (!list.length) list = pack.voice.episodes;
+      var serial = !!(season && list[0].episode);
+      var drawn = list.map(function (ep) {
+        return {
+          title: ep.title || 'Дивитись',
+          season: serial ? ep.season : undefined,
+          episode: serial ? ep.episode : undefined,
+          voice_name: pack.voice.name,
+          ref: ep
+        };
+      });
+      component.draw(drawn, {
+        onEnter: function onEnter(item) {
+          if (item.mark) item.mark();
+          var playlist = drawn.map(function (entry) {
+            var cell = {
+              title: entry.title,
+              season: entry.season,
+              episode: entry.episode,
+              voice_name: entry.voice_name,
+              subtitles: entry.ref.subtitle ? [{
+                label: 'Субтитри',
+                url: entry.ref.subtitle
+              }] : []
+            };
+            if (entry === item) cell.url = entry.ref.file;else {
+              var file = entry.ref.file;
+              cell.url = function (call) {
+                cell.url = file;
+                call();
+              };
+            }
+            return cell;
+          });
+          Lampa.Player.play({
+            url: item.ref.file,
+            title: item.title,
+            season: item.season,
+            episode: item.episode,
+            voice_name: item.voice_name,
+            timeline: item.timeline,
+            quality: {
+              '1080p': item.ref.file
+            },
+            subtitles: item.ref.subtitle ? [{
+              label: 'Субтитри',
+              url: item.ref.subtitle
+            }] : [],
+            playlist: playlist,
+            isonline: true
+          });
+        },
+        onContextMenu: function onContextMenu(item, html, data, call) {
+          call({
+            file: item.ref.file,
+            quality: {
+              '1080p': item.ref.file
+            },
+            season: item.season,
+            episode: item.episode
+          });
+        }
+      });
+      component.loading(false);
     }
     function parseCards(html) {
       var out = [];
@@ -1566,27 +1758,37 @@
       }));
       component.loading(false);
     }
+    function watchRow(url, title) {
+      voices = [];
+      component.similars([{
+        title: title || 'Дивитись',
+        source: 'eneyida',
+        ref: {
+          iframe: url
+        }
+      }]);
+      component.loading(false);
+    }
     function loadPage(href, title) {
       component.loading(true);
       getText(href, function (html) {
         var embed = html.match(/<iframe[^>]+src=["'](https?:\/\/hdvbua\.pro\/embed\/[^"']+)["']/i);
         if (!embed) {
-          openSiteFrame(href);
-          component.loading(false);
+          watchRow(href, title);
           return;
         }
-        component.similars([{
-          title: title || 'Дивитись',
-          source: 'eneyida',
-          ref: {
-            iframe: embed[1],
-            href: href
+        getText(embed[1], function (player) {
+          voices = parsePlaylist(player);
+          if (!voices.length) {
+            watchRow(embed[1], title);
+            return;
           }
-        }]);
-        component.loading(false);
+          showEpisodes();
+        }, function () {
+          watchRow(embed[1], title);
+        });
       }, function () {
-        openSiteFrame(href);
-        component.loading(false);
+        watchRow(href, title);
       });
     }
     function doSearch(title) {
@@ -1595,16 +1797,13 @@
         component.empty();
         return;
       }
-      if (!hasNative()) {
-        showSite(title);
-        return;
-      }
       component.loading(true);
+      voices = [];
       getText(searchUrl(title), function (html) {
         var cards = parseCards(html);
-        if (!cards.length) showSite(title);else if (cards.length === 1) loadPage(cards[0].href, cards[0].title);else showCards(cards);
+        if (!cards.length) component.empty();else showCards(cards);
       }, function () {
-        showSite(title);
+        component.doesNotAnswer();
       });
     }
     this.searchByTitle = function (obj, title) {
@@ -1625,12 +1824,23 @@
       }
       doSearch(first.title || object.movie && (object.movie.title || object.movie.name) || '');
     };
-    this.extendChoice = function () {};
+    this.extendChoice = function (saved) {
+      if (!saved) return;
+      if (typeof saved.season !== 'undefined') choice.season = saved.season;
+      if (typeof saved.voice !== 'undefined') choice.voice = saved.voice;
+      if (saved.voice_name) choice.voice_name = saved.voice_name;
+    };
     this.reset = function () {
       component.reset();
-      doSearch(object.movie && (object.movie.title || object.movie.name) || object.search || '');
+      if (voices.length) showEpisodes();else doSearch(object.movie && (object.movie.title || object.movie.name) || object.search || '');
     };
-    this.filter = function () {};
+    this.filter = function (type, a, b) {
+      if (!a || !b) return;
+      choice[a.stype] = b.index;
+      if (a.stype == 'voice' && voices[b.index]) choice.voice_name = voices[b.index].name;
+      component.reset();
+      showEpisodes();
+    };
     this.cancel = function () {
       net.clear();
     };
