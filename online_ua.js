@@ -2,7 +2,7 @@
 (function () {
     'use strict';
 
-    var mod_version = '1.0.4';
+    var mod_version = '1.0.5';
     var LOG = '[OnlineUA] ';
 
     function startsWith(s, p) { return s.lastIndexOf(p, 0) === 0; }
@@ -23,6 +23,15 @@
     function isCloudflare(a, text) {
         text = ((text || '') + ((a && (a.responseText || '')) || '')) + '';
         return text.indexOf('Just a moment') !== -1 || text.indexOf('_cf_chl_opt') !== -1 || text.indexOf('challenges.cloudflare.com') !== -1;
+    }
+
+    function isUseless(str) {
+        str = (str || '') + '';
+        if (isCloudflare(null, str)) return true;
+        if (str.indexOf('Playerjs') !== -1 || str.indexOf('m3u8') !== -1 || str.indexOf('.mp4') !== -1) return false;
+        if (str.indexOf('sres-wrap') !== -1 || str.indexOf('short-item') !== -1 || str.indexOf('grid-items') !== -1) return false;
+        if (str.indexOf('video-item') !== -1 || str.indexOf('<iframe') !== -1) return false;
+        return str.length < 800;
     }
 
     function corsTargets(url) {
@@ -134,6 +143,10 @@
         eneyida: {
             title: 'Eneyida', host: 'https://eneyida.tv', dle: true,
             match: /\/(filmi|serialy|multiki|anime)\//i
+        },
+        uafix: {
+            title: 'UAFix', host: 'https://uafix.net', dle: true,
+            match: /\/(films|serials|anime|cartoons)\/[^\/?#]+/i
         }
         /* Щоб додати сайт — скопіюйте блок і змініть host/match.
            Дзеркала змінюються: якщо сайт не відкривається — оновіть host. */
@@ -161,9 +174,9 @@
                 net.clear();
                 net.timeout(20000);
                 net.native(target, function (str) {
-                    if (isCloudflare(null, str) && i < targets.length) {
-                        log('cloudflare, next proxy');
-                        next({ status: 403, responseText: 'cloudflare' }, 'cloudflare');
+                    if (isUseless(str) && i < targets.length) {
+                        log('порожня відповідь, next proxy');
+                        next({ status: 404, responseText: 'empty' }, 'empty');
                         return;
                     }
                     ok(str);
@@ -197,6 +210,8 @@
                 var en = (box.find('.th-title-oname').first().text() || '').trim();
                 if (uk) return en && uk.toLowerCase() !== en.toLowerCase() ? (uk + ' / ' + en) : uk;
             }
+            var head = ($(el).find('h2, .vi-title').first().text() || '').replace(/\s+/g, ' ').trim();
+            if (head) return head;
             if (!text) text = ($(el).find('img').attr('alt') || '').trim();
             if (!text) text = ($(el).text() || '').trim();
             return text;
@@ -207,6 +222,7 @@
             try {
                 var dom = $('<div>' + (str || '').replace(/\n/g, '') + '</div>');
                 var nodes = $('.short-item a.short-img[href]', dom);
+                if (!nodes.length) nodes = $('a.sres-wrap[href]', dom);
                 if (!nodes.length) nodes = $('a[href]', dom);
                 nodes.each(function () {
                     var href = $(this).attr('href') || '';
@@ -284,17 +300,31 @@
                 try { json = (0, eval)('"use strict"; (' + raw + ');'); } catch (e) { log('eval err', e); }
                 if (json && typeof json === 'string') json = { file: json };
             }
-            if (json && json.file) { onDone(json); return; }
+            if (json && json.file) {
+                if (typeof json.file === 'string' && json.file.charAt(0) !== '[' && json.file.charAt(0) !== '{') {
+                    json.file = '[1080p]' + json.file;
+                }
+                onDone(json);
+                return;
+            }
 
             // прямі enlace m3u8/mp4 у скриптах
             var hls = str.match(/https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*/i) || str.match(/https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*/i);
             if (hls) { onDone({ file: '[auto]' + fixLink(hls[0], url) }); return; }
 
-            // <iframe> — рекурсивно (глибина ≤ 3)
-            var ifr = str.match(/<iframe[^>]+data-src=["']([^"']+)["']/i) ||
-                      str.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-            if (ifr && depth < 3) {
-                var fr_url = fixLink(ifr[1], url);
+            // <iframe> — рекурсивно (глибина ≤ 3), трейлер YouTube пропускаємо
+            var fr_src = '';
+            var tags = str.match(/<iframe\b[^>]*>/gi) || [];
+            for (var ti = 0; ti < tags.length; ti++) {
+                var ds = tags[ti].match(/data-src=["']([^"']+)["']/i);
+                var ss = tags[ti].match(/\ssrc=["']([^"']+)["']/i);
+                var cand = (ds && ds[1]) || (ss && ss[1]) || '';
+                if (!cand || /youtube\.com|youtu\.be|\/trailer\b/i.test(cand)) continue;
+                fr_src = cand;
+                break;
+            }
+            if (fr_src && depth < 3) {
+                var fr_url = fixLink(fr_src, url);
                 log('iframe →', fr_url);
                 get(fr_url, function (s2) {
                     parsePlayer(s2, fr_url, depth + 1, function (json) {
@@ -304,6 +334,27 @@
                 return;
             }
             onDone(null);
+        }
+
+        function parseEpisodeLinks(str) {
+            var out = [];
+            try {
+                var dom = $('<div>' + (str || '').replace(/\n/g, '') + '</div>');
+                $('.video-item a[href]', dom).each(function () {
+                    var href = $(this).attr('href') || '';
+                    var title = ($(this).find('.vi-title').text() || '').replace(/\s+/g, ' ').trim();
+                    if (href && title) out.push({ title: title, link: fixLink(href, site_cfg.host + '/') });
+                });
+            } catch (e) { log('episodes error', e); }
+            out.sort(function (a, b) {
+                function num(t) {
+                    var m = (t || '').match(/сезон\s*(\d+)/i);
+                    var e = (t || '').match(/(?:серія|серия|епізод|эпизод)\s*(\d+)/i);
+                    return ((m && parseInt(m[1])) || 0) * 1000 + ((e && parseInt(e[1])) || 0);
+                }
+                return num(a.title) - num(b.title);
+            });
+            return out;
         }
 
         function getPage(url) {
@@ -331,6 +382,13 @@
                         component.refilter(['Плеєр']);
                         component.appendItems(self.filtred());
                     } else {
+                        var eps = parseEpisodeLinks(str);
+                        if (eps.length) {
+                            self.wait_similars = true;
+                            eps.forEach(function (c) { c.is_similars = true; });
+                            component.similars(eps);
+                            return;
+                        }
                         log('player не знайдено на', url);
                         component.empty_for_query(select_title);
                     }
