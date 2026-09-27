@@ -2,7 +2,7 @@
 (function () {
     'use strict';
 
-    var mod_version = '1.0.1';
+    var mod_version = '1.0.2';
     var LOG = '[OnlineUA] ';
 
     function startsWith(s, p) { return s.lastIndexOf(p, 0) === 0; }
@@ -65,8 +65,8 @@
             match: /\/(filmy|serialy|multfilmy|anime)\//i
         },
         uaserials: {
-            title: 'UASerials', host: 'https://uaserials.pro', dle: true,
-            match: /\/(serial|film|mult|anime)\//i
+            title: 'UASerials', host: 'https://uaserials.my', dle: true,
+            match: /\/(serial|film|mult|anime)\/|\/\d+-[^\/?#]+\.html/i
         },
         eneyida: {
             title: 'Eneyida', host: 'https://eneyida.tv', dle: true,
@@ -103,13 +103,28 @@
         }
 
         // --- пошук карток у видачі сайту ---
+        function cardTitle(el) {
+            var text = ($(el).attr('title') || '').trim();
+            var box = $(el).closest('.short-item');
+            if (box.length) {
+                var uk = (box.find('.th-title').first().text() || '').trim();
+                var en = (box.find('.th-title-oname').first().text() || '').trim();
+                if (uk) return en && uk.toLowerCase() !== en.toLowerCase() ? (uk + ' / ' + en) : uk;
+            }
+            if (!text) text = ($(el).find('img').attr('alt') || '').trim();
+            if (!text) text = ($(el).text() || '').trim();
+            return text;
+        }
+
         function parseSearch(str) {
             var out = [];
             try {
                 var dom = $('<div>' + (str || '').replace(/\n/g, '') + '</div>');
-                $('a[href]', dom).each(function () {
+                var nodes = $('.short-item a.short-img[href]', dom);
+                if (!nodes.length) nodes = $('a[href]', dom);
+                nodes.each(function () {
                     var href = $(this).attr('href') || '';
-                    var text = ($(this).attr('title') || $(this).text() || '').trim();
+                    var text = cardTitle(this);
                     if (href && text && text.length > 2 && site_cfg.match.test(href)) {
                         var year = parseInt((text.match(/\b(19|20)\d{2}\b/) || [])[0] || 0);
                         out.push({
@@ -190,7 +205,8 @@
             if (hls) { onDone({ file: '[auto]' + fixLink(hls[0], url) }); return; }
 
             // <iframe> — рекурсивно (глибина ≤ 3)
-            var ifr = str.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+            var ifr = str.match(/<iframe[^>]+data-src=["']([^"']+)["']/i) ||
+                      str.match(/<iframe[^>]+src=["']([^"']+)["']/i);
             if (ifr && depth < 3) {
                 var fr_url = fixLink(ifr[1], url);
                 log('iframe →', fr_url);
