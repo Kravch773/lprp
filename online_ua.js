@@ -1488,34 +1488,37 @@
       if (str.indexOf('Just a moment') !== -1 || str.indexOf('_cf_chl_opt') !== -1) return false;
       return str.indexOf('short_title') !== -1 || str.indexOf('hdvbua.pro/embed') !== -1 || str.indexOf('article class="short') !== -1;
     }
-    function getText(url, ok, fail) {
-      var targets = [url, 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url), 'https://cors.redoc.ly/' + url];
-      var i = 0;
-      function next() {
-        if (i >= targets.length) {
-          fail();
-          return;
-        }
-        var target = targets[i++];
-        net.clear();
-        net.timeout(12000);
-        net.native(target, function (str) {
-          if (!useful(str) && i < targets.length) {
-            next();
-            return;
-          }
-          if (!useful(str)) {
-            fail();
-            return;
-          }
-          ok(str);
-        }, function () {
-          next();
-        }, false, {
-          dataType: 'text'
-        });
+    function hasNative() {
+      try {
+        return !!(window.AndroidJS && AndroidJS.httpReq);
+      } catch (e) {
+        return false;
       }
-      next();
+    }
+    function searchUrl(title) {
+      return HOST + '/index.php?do=search&subaction=search&search_start=0&full_search=0&story=' + encodeURIComponent(title);
+    }
+    function showSite(title) {
+      var url = searchUrl(title);
+      component.similars([{
+        title: title,
+        orig_title: 'Eneyida',
+        source: 'eneyida',
+        ref: {
+          iframe: url
+        }
+      }]);
+      component.loading(false);
+      openSiteFrame(url);
+    }
+    function getText(url, ok, fail) {
+      net.clear();
+      net.timeout(20000);
+      net.native(url, function (str) {
+        if (!useful(str)) fail();else ok(str);
+      }, fail, false, {
+        dataType: 'text'
+      });
     }
     function parseCards(html) {
       var out = [];
@@ -1568,7 +1571,8 @@
       getText(href, function (html) {
         var embed = html.match(/<iframe[^>]+src=["'](https?:\/\/hdvbua\.pro\/embed\/[^"']+)["']/i);
         if (!embed) {
-          component.empty();
+          openSiteFrame(href);
+          component.loading(false);
           return;
         }
         component.similars([{
@@ -1581,7 +1585,8 @@
         }]);
         component.loading(false);
       }, function () {
-        component.doesNotAnswer();
+        openSiteFrame(href);
+        component.loading(false);
       });
     }
     function doSearch(title) {
@@ -1590,13 +1595,16 @@
         component.empty();
         return;
       }
+      if (!hasNative()) {
+        showSite(title);
+        return;
+      }
       component.loading(true);
-      var url = HOST + '/index.php?do=search&subaction=search&search_start=0&full_search=0&story=' + encodeURIComponent(title);
-      getText(url, function (html) {
+      getText(searchUrl(title), function (html) {
         var cards = parseCards(html);
-        if (cards.length === 1) loadPage(cards[0].href, cards[0].title);else showCards(cards);
+        if (!cards.length) showSite(title);else if (cards.length === 1) loadPage(cards[0].href, cards[0].title);else showCards(cards);
       }, function () {
-        component.doesNotAnswer();
+        showSite(title);
       });
     }
     this.searchByTitle = function (obj, title) {
