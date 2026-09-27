@@ -2,7 +2,7 @@
 (function () {
     'use strict';
 
-    var mod_version = '1.0.2';
+    var mod_version = '1.0.3';
     var LOG = '[OnlineUA] ';
 
     function startsWith(s, p) { return s.lastIndexOf(p, 0) === 0; }
@@ -10,6 +10,61 @@
 
     function log() {
         try { console.log.apply(console, [LOG].concat([].slice.call(arguments))); } catch (e) {}
+    }
+
+    // Браузер на lampa.mx не читає чужі сайти без CORS. Android-додаток ходить напряму.
+    function useCors() {
+        try {
+            if (window.AndroidJS && typeof window.AndroidJS.httpReq === 'function') return false;
+        } catch (e) {}
+        return true;
+    }
+
+    function corsBase() {
+        var custom = '';
+        try { custom = (Lampa.Storage.get('online_ua_cors', '') || '') + ''; } catch (e) {}
+        custom = (custom || '').trim();
+        if (!custom) custom = 'https://cors.redoc.ly/';
+        if (custom.charAt(custom.length - 1) !== '/') custom += '/';
+        return custom;
+    }
+
+    function corsUrl(url) {
+        if (!url || !useCors()) return url;
+        var base = corsBase();
+        if (url.indexOf(base) === 0) return url;
+        return base + url;
+    }
+
+    function openFrame(url) {
+        $('.online-ua-frame').remove();
+        var root = $('<div class="online-ua-frame"></div>');
+        root.css({ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, zIndex: 99999, background: '#000' });
+        var frame = $('<iframe allowfullscreen></iframe>');
+        frame.attr({ src: url, allow: 'autoplay; fullscreen; encrypted-media; picture-in-picture' });
+        frame.css({ width: '100%', height: '100%', border: 0, display: 'block' });
+        var close = $('<div class="selector online-ua-frame__close">Закрити</div>');
+        close.css({
+            position: 'absolute', top: '1em', right: '1em', zIndex: 2,
+            padding: '0.6em 1em', background: 'rgba(0,0,0,.7)', color: '#fff', borderRadius: '0.4em'
+        });
+        root.append(frame).append(close);
+        $('body').append(root);
+        var prev = 'content';
+        try { prev = Lampa.Controller.enabled().name || 'content'; } catch (e) {}
+        function shut() {
+            root.remove();
+            Lampa.Controller.toggle(prev);
+        }
+        close.on('hover:enter click', function () { shut(); });
+        Lampa.Controller.add('online_ua_frame', {
+            toggle: function () {
+                Lampa.Controller.collectionSet(root);
+                Lampa.Controller.collectionFocus(close[0], root);
+            },
+            back: shut
+        });
+        Lampa.Controller.toggle('online_ua_frame');
     }
 
     function shortText(str, limit) {
@@ -91,7 +146,9 @@
         function get(url, ok, fail, post) {
             net.clear();
             net.timeout(20000);
-            net.native(url, ok, fail, post || false, { dataType: 'text' });
+            var target = post ? url : corsUrl(url);
+            if (target !== url) log('cors', target);
+            net.native(target, ok, fail, post || false, { dataType: 'text' });
         }
 
         function uniqCards(list) {
@@ -210,8 +267,11 @@
             if (ifr && depth < 3) {
                 var fr_url = fixLink(ifr[1], url);
                 log('iframe →', fr_url);
-                get(fr_url, function (s2) { parsePlayer(s2, fr_url, depth + 1, onDone); },
-                    function () { onDone(null); });
+                get(fr_url, function (s2) {
+                    parsePlayer(s2, fr_url, depth + 1, function (json) {
+                        onDone(json && (json.file || json.iframe) ? json : { iframe: fr_url });
+                    });
+                }, function () { onDone({ iframe: fr_url }); });
                 return;
             }
             onDone(null);
@@ -229,6 +289,18 @@
                             component.refilter(voices.map(function (v, i) { return v.title || 'Плеєр ' + (i + 1); }));
                             component.appendItems(self.filtred());
                         } else component.empty_for_query(select_title);
+                    } else if (json && json.iframe) {
+                        voices = [{
+                            title: 'Плеєр',
+                            episodes: [{
+                                title: select_title || 'Дивитись',
+                                items: [{ label: 'Плеєр', file: json.iframe, iframe: true }],
+                                subtitles: false
+                            }]
+                        }];
+                        self.choice_voice = 0;
+                        component.refilter(['Плеєр']);
+                        component.appendItems(self.filtred());
                     } else {
                         log('player не знайдено на', url);
                         component.empty_for_query(select_title);
@@ -251,8 +323,7 @@
 
             var url, post = null;
             if (site_cfg.dle) {
-                url = site_cfg.host + '/index.php?do=search';
-                post = 'do=search&subaction=search&story=' + encodeURIComponent(query);
+                url = site_cfg.host + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
             } else {
                 url = site_cfg.host + '/search?q=' + encodeURIComponent(query);
             }
@@ -446,6 +517,7 @@
                     var extra = getFile(element);
                     element.loading = false;
                     if (!extra.file) { Lampa.Noty.show('Не вдалося отримати посилання'); return; }
+                    if (extra.iframe) { openFrame(extra.file); return; }
 
                     var first = {
                         url: extra.file,
@@ -526,7 +598,7 @@
                 quality = {};
                 items.forEach(function (i) { if (!quality[i.label]) quality[i.label] = i.file; });
             }
-            return { file: file, quality: quality, subtitles: element.media.subtitles };
+            return { file: file, quality: quality, subtitles: element.media.subtitles, iframe: !!(items[0] && items[0].iframe) };
         }
 
         function renameQuality(q) { return q; } // за потреби: мапа label→url
