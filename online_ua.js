@@ -2,7 +2,7 @@
 (function () {
     'use strict';
 
-    var mod_version = '1.0.3';
+    var mod_version = '1.0.4';
     var LOG = '[OnlineUA] ';
 
     function startsWith(s, p) { return s.lastIndexOf(p, 0) === 0; }
@@ -20,20 +20,28 @@
         return true;
     }
 
-    function corsBase() {
+    function isCloudflare(a, text) {
+        text = ((text || '') + ((a && (a.responseText || '')) || '')) + '';
+        return text.indexOf('Just a moment') !== -1 || text.indexOf('_cf_chl_opt') !== -1 || text.indexOf('challenges.cloudflare.com') !== -1;
+    }
+
+    function corsTargets(url) {
+        var list = [];
         var custom = '';
         try { custom = (Lampa.Storage.get('online_ua_cors', '') || '') + ''; } catch (e) {}
         custom = (custom || '').trim();
-        if (!custom) custom = 'https://cors.redoc.ly/';
-        if (custom.charAt(custom.length - 1) !== '/') custom += '/';
-        return custom;
-    }
-
-    function corsUrl(url) {
-        if (!url || !useCors()) return url;
-        var base = corsBase();
-        if (url.indexOf(base) === 0) return url;
-        return base + url;
+        if (custom) {
+            if (custom.indexOf('{url}') !== -1) list.push(custom.replace('{url}', encodeURIComponent(url)));
+            else {
+                if (custom.charAt(custom.length - 1) !== '/') custom += '/';
+                list.push(custom + url);
+            }
+        }
+        var allorigins = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+        var redoc = 'https://cors.redoc.ly/' + url;
+        if (url.indexOf('uakino.') !== -1) { list.push(allorigins); list.push(redoc); }
+        else { list.push(redoc); list.push(allorigins); }
+        return list;
     }
 
     function openFrame(url) {
@@ -108,8 +116,8 @@
 
     var SITES = {
         uakino: {
-            title: 'UAKino', host: 'https://uakino.me', dle: true,
-            match: /\/(filmy|serialy|multfilmy|anime|kluchovix)\//i
+            title: 'UAKino', host: 'https://uakino.cx', dle: true, searchPath: true,
+            match: /\/(filmy|serialy|multfilmy|anime|kluchovix)\/|\/\d+-[^\/?#]+\.html/i
         },
         timetowatch: {
             title: 'TimeToWatch', host: 'https://time-to-watch.net', dle: true,
@@ -144,11 +152,32 @@
         this.choice_voice = 0;
 
         function get(url, ok, fail, post) {
-            net.clear();
-            net.timeout(20000);
-            var target = post ? url : corsUrl(url);
-            if (target !== url) log('cors', target);
-            net.native(target, ok, fail, post || false, { dataType: 'text' });
+            var targets = (post || !useCors()) ? [url] : corsTargets(url);
+            var i = 0;
+            function next(errA, errC) {
+                if (i >= targets.length) { fail(errA, errC); return; }
+                var target = targets[i++];
+                if (target !== url) log('cors', target);
+                net.clear();
+                net.timeout(20000);
+                net.native(target, function (str) {
+                    if (isCloudflare(null, str) && i < targets.length) {
+                        log('cloudflare, next proxy');
+                        next({ status: 403, responseText: 'cloudflare' }, 'cloudflare');
+                        return;
+                    }
+                    ok(str);
+                }, function (a, c) {
+                    var status = a && a.status;
+                    if (i < targets.length && (isCloudflare(a) || !status || status === 403 || status === 408 || status === 429 || status >= 500)) {
+                        log('cors fail', status, 'next');
+                        next(a, c);
+                        return;
+                    }
+                    fail(a, c);
+                }, post || false, { dataType: 'text' });
+            }
+            next();
         }
 
         function uniqCards(list) {
@@ -322,7 +351,9 @@
             var query = component.clean_title(select_title);
 
             var url, post = null;
-            if (site_cfg.dle) {
+            if (site_cfg.dle && site_cfg.searchPath) {
+                url = site_cfg.host + '/search/' + encodeURIComponent(query) + '/';
+            } else if (site_cfg.dle) {
                 url = site_cfg.host + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
             } else {
                 url = site_cfg.host + '/search?q=' + encodeURIComponent(query);
@@ -352,6 +383,21 @@
                     component.loading(false);
                 } else component.empty_for_query(select_title);
             }, function (a, c) {
+                if (isCloudflare(a)) {
+                    voices = [{
+                        title: site_cfg.title,
+                        episodes: [{
+                            title: 'Відкрити пошук на ' + site_cfg.title,
+                            items: [{ label: 'Сайт', file: url, iframe: true }],
+                            subtitles: false
+                        }]
+                    }];
+                    self.choice_voice = 0;
+                    component.loading(false);
+                    component.refilter([site_cfg.title]);
+                    component.appendItems(self.filtred());
+                    return;
+                }
                 component.empty('Не вдалося виконати пошук: ' + site_cfg.title + ' (' + errorDecode(a, c) + ')');
             }, post);
         };
