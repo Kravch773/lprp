@@ -1506,6 +1506,7 @@
     function getText(url, ok, fail) {
       var targets = [];
       if (hasNative()) targets.push(url);
+      targets.push('https://cors.redoc.ly/' + url);
       targets.push(PROXY + encodeURIComponent(url));
       var i = 0;
       function next() {
@@ -1514,7 +1515,7 @@
           return;
         }
         net.clear();
-        net.timeout(12000);
+        net.timeout(10000);
         net.native(targets[i++], function (str) {
           if (!useful(str)) {
             if (i < targets.length) next();else fail();
@@ -1747,12 +1748,14 @@
         getText(embed[0], function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
-            component.empty();
+            openSiteFrame(embedBase);
+            component.loading(false);
             return;
           }
           showEpisodes();
         }, function () {
-          component.doesNotAnswer();
+          openSiteFrame(embedBase);
+          component.loading(false);
         });
       }, function () {
         component.doesNotAnswer();
