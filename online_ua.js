@@ -1490,6 +1490,7 @@
       voice_name: ''
     };
     var voices = [];
+    var embedBase = '';
     function hasNative() {
       try {
         return !!(window.AndroidJS && AndroidJS.httpReq);
@@ -1714,48 +1715,14 @@
       component.draw(drawn, {
         onEnter: function onEnter(item) {
           if (item.mark) item.mark();
-          var url = playUrl(item.ref.file);
-          var subs = item.ref.subtitle ? [{
-            label: 'Субтитри',
-            url: playUrl(item.ref.subtitle)
-          }] : [];
-          var playlist = drawn.map(function (entry) {
-            var cell = {
-              title: entry.title,
-              season: entry.season,
-              episode: entry.episode,
-              voice_name: entry.voice_name,
-              subtitles: entry.ref.subtitle ? [{
-                label: 'Субтитри',
-                url: playUrl(entry.ref.subtitle)
-              }] : []
-            };
-            if (entry === item) cell.url = url;else {
-              var file = playUrl(entry.ref.file);
-              cell.url = function (call) {
-                cell.url = file;
-                call();
-              };
-            }
-            return cell;
-          });
-          Lampa.Player.play({
-            url: url,
-            title: item.title,
-            season: item.season,
-            episode: item.episode,
-            voice_name: item.voice_name,
-            timeline: item.timeline,
-            quality: {
-              Auto: url
-            },
-            subtitles: subs,
-            playlist: playlist,
-            isonline: true
-          });
+          var src = embedBase;
+          if (src && (item.season || item.episode)) {
+            src += '?season=' + (item.season || 1) + '&episode=' + (item.episode || 1);
+          }
+          if (src) openSiteFrame(src);
         },
         onContextMenu: function onContextMenu(item, html, data, call) {
-          var url = playUrl(item.ref.file);
+          var url = item.ref.file;
           call({
             file: url,
             quality: {
@@ -1776,6 +1743,7 @@
           component.empty();
           return;
         }
+        embedBase = embed[0];
         getText(embed[0], function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
