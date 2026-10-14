@@ -1824,11 +1824,13 @@
       voice_name: ''
     };
     var voices = [];
-    function useful(str) {
+    function useful(str, kind) {
       str = str || '';
       if (str.indexOf('Just a moment') !== -1 || str.indexOf('_cf_chl_opt') !== -1) return false;
       if (str.indexOf('Контент недоступний') !== -1 || str.indexOf('error code:') !== -1) return false;
-      return str.indexOf('short_title') !== -1 || str.indexOf('hdvbua.pro/embed') !== -1 || str.indexOf('Playerjs') !== -1 || str.indexOf('article class="short') !== -1;
+      if (kind === 'player') return str.indexOf('Playerjs') !== -1 || /file:\s*['"]/.test(str);
+      if (kind === 'page') return /hdvbua\.pro\/embed\//i.test(str);
+      return str.indexOf('short_title') !== -1 || str.indexOf('article class="short') !== -1 || /\/\d+-[^\/\s]+\.html/i.test(str);
     }
     function hasNative() {
       try {
@@ -1840,33 +1842,49 @@
     function searchUrl(title) {
       return HOST + '/index.php?do=search&subaction=search&search_start=0&full_search=0&story=' + encodeURIComponent(title);
     }
-    function getText(url, ok, fail) {
-      var targets = [];
-      if (hasNative()) targets.push(url);
-      targets.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
-      if (url.indexOf('hdvbua.pro') === -1 && !/\.html(\?|$)/i.test(url)) {
-        targets.push('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+    function proxyTargets(url, kind) {
+      var list = [];
+      if (hasNative()) list.push(url);
+      if (kind !== 'player') {
+        list.push({
+          url: 'https://r.jina.ai/' + url,
+          headers: {
+            'X-Return-Format': 'html'
+          }
+        });
       }
+      list.push('https://cors.redoc.ly/' + url);
+      list.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
+      if (kind === 'search') list.push('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+      return list;
+    }
+    function getText(url, kind, ok, fail) {
+      var targets = proxyTargets(url, kind);
       var i = 0;
       function next() {
         if (i >= targets.length) {
           fail();
           return;
         }
-        var target = targets[i++];
+        var item = targets[i++];
+        var target = typeof item === 'string' ? item : item.url;
+        var extra = typeof item === 'string' ? {
+          dataType: 'text'
+        } : {
+          dataType: 'text',
+          headers: item.headers
+        };
         net.clear();
-        net.timeout(8000);
+        net.timeout(kind === 'search' ? 14000 : 10000);
         net.native(target, function (str) {
-          if (!useful(str)) {
+          if (!useful(str, kind)) {
             if (i < targets.length) next();else fail();
             return;
           }
           ok(str);
         }, function () {
           next();
-        }, false, {
-          dataType: 'text'
-        });
+        }, false, extra);
       }
       next();
     }
@@ -1874,13 +1892,29 @@
       var found = (title || '').match(/(\d+)/);
       return found ? parseInt(found[1], 10) : 0;
     }
+    function extractFile(html) {
+      var mark = html.match(/file\s*:\s*'/);
+      if (!mark) mark = html.match(/file\s*:\s*"/);
+      if (!mark) return '';
+      var start = mark.index + mark[0].length;
+      if (html.charAt(start) !== '[') {
+        var end = html.indexOf(html.charAt(start - 1), start);
+        return end > start ? html.slice(start, end) : '';
+      }
+      var depth = 0;
+      for (var i = start; i < html.length; i++) {
+        var ch = html.charAt(i);
+        if (ch === '[') depth++;else if (ch === ']') {
+          depth--;
+          if (!depth) return html.slice(start, i + 1);
+        }
+      }
+      return '';
+    }
     function parsePlaylist(html) {
-      var raw = '';
-      var listed = html.match(/file:\s*'(\[[\s\S]*?\])'/);
-      if (!listed) listed = html.match(/file:\s*"(\[[\s\S]*?\])"/);
-      if (listed) raw = listed[1];
+      var raw = extractFile(html);
       var data = null;
-      if (raw) {
+      if (raw && raw.charAt(0) === '[') {
         try {
           data = JSON.parse(raw);
         } catch (e) {
@@ -1926,16 +1960,13 @@
           if (/сезон/i.test(title)) walk(node.folder, numFrom(title) || season, voice);else walk(node.folder, season, title || voice);
         }
       }
-      if (data) walk(data, 0, '');else {
-        var one = html.match(/file:\s*["'](https?:[^"']+)["']/);
-        if (one) add('', {
-          season: 0,
-          episode: 0,
-          file: one[1],
-          title: 'Дивитись',
-          subtitle: ''
-        });
-      }
+      if (data) walk(data, 0, '');else if (/^https?:/i.test(raw)) add('', {
+        season: 0,
+        episode: 0,
+        file: raw,
+        title: 'Дивитись',
+        subtitle: ''
+      });
       return Object.keys(groups).map(function (name) {
         return {
           name: name,
@@ -2050,27 +2081,50 @@
     function parseCards(html) {
       var out = [];
       var seen = {};
+      function push(title, orig, year, href) {
+        if (!href) return;
+        if (href.indexOf('/') === 0) href = HOST + href;
+        if (!/\/\d+-[^\/?#]+\.html$/i.test(href) || seen[href]) return;
+        seen[href] = 1;
+        title = (title || '').replace(/\s+/g, ' ').trim();
+        if (!title) return;
+        out.push({
+          title: title,
+          orig: orig || '',
+          year: year || '',
+          href: href
+        });
+      }
       try {
         var dom = $('<div>' + (html || '').replace(/\n/g, '') + '</div>');
         dom.find('article.short, .short_in').each(function () {
           var box = $(this);
           var link = box.find('a.short_title').first();
           var href = link.attr('href') || box.find('a.short_img').attr('href') || '';
-          if (!/\/\d+-[^\/?#]+\.html$/i.test(href) || seen[href]) return;
-          seen[href] = 1;
           var title = (link.text() || box.find('a.short_img').attr('title') || '').replace(/\s+/g, ' ').trim();
           var sub = (box.find('.short_subtitle').text() || '').replace(/\s+/g, ' ').trim();
           var year = (sub.match(/\b(19|20)\d{2}\b/) || [])[0] || '';
           var orig = sub.split('\u2022').pop() || '';
           orig = orig.replace(/^[\s\u00b7•]+/, '').trim();
           if (!orig || orig === year || orig === title) orig = '';
-          if (title) out.push({
-            title: title,
-            orig: orig,
-            year: year,
-            href: href
-          });
+          push(title, orig, year, href);
         });
+        if (!out.length) {
+          var re = /https?:\/\/eneyida\.tv\/(\d+-[^\/\s"'<>]+)\.html/gi;
+          var match;
+          while (match = re.exec(html || '')) {
+            var href = match[0];
+            var around = (html || '').slice(Math.max(0, match.index - 80), match.index + match[0].length + 80);
+            var title = '';
+            var md = around.match(/\[([^\]]+)\]\(/);
+            if (md) title = md[1];
+            if (!title) {
+              var alt = around.match(/>([^<]{2,80})</);
+              if (alt) title = alt[1];
+            }
+            push(title || match[1], '', '', href);
+          }
+        }
       } catch (e) {}
       return out;
     }
@@ -2093,37 +2147,32 @@
       }));
       component.loading(false);
     }
-    function watchRow(url, title) {
-      voices = [];
-      component.similars([{
-        title: title || 'Дивитись',
-        source: 'eneyida',
-        ref: {
-          iframe: url
-        }
-      }]);
-      component.loading(false);
+    function findEmbed(html) {
+      var found = (html || '').match(/https?:\/\/hdvbua\.pro\/embed\/[^\s"'<>]+/i);
+      if (found) return found[0].replace(/&amp;/g, '&');
+      found = (html || '').match(/\/\/hdvbua\.pro\/embed\/[^\s"'<>]+/i);
+      return found ? 'https:' + found[0].replace(/&amp;/g, '&') : '';
     }
-    function loadPage(href, title) {
+    function loadPage(href) {
       component.loading(true);
-      getText(href, function (html) {
-        var embed = html.match(/<iframe[^>]+src=["'](https?:\/\/hdvbua\.pro\/embed\/[^"']+)["']/i);
+      getText(href, 'page', function (html) {
+        var embed = findEmbed(html);
         if (!embed) {
-          watchRow(href, title);
+          component.empty();
           return;
         }
-        getText(embed[1], function (player) {
+        getText(embed, 'player', function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
-            watchRow(embed[1], title);
+            component.empty();
             return;
           }
           showEpisodes();
         }, function () {
-          watchRow(embed[1], title);
+          component.doesNotAnswer();
         });
       }, function () {
-        watchRow(href, title);
+        component.doesNotAnswer();
       });
     }
     function doSearch(title) {
@@ -2134,9 +2183,9 @@
       }
       component.loading(true);
       voices = [];
-      getText(searchUrl(title), function (html) {
+      getText(searchUrl(title), 'search', function (html) {
         var cards = parseCards(html);
-        if (!cards.length) component.empty();else showCards(cards);
+        if (!cards.length) component.empty();else if (cards.length === 1) loadPage(cards[0].href);else showCards(cards);
       }, function () {
         component.doesNotAnswer();
       });
@@ -2148,13 +2197,8 @@
     this.search = function (obj, data) {
       object = obj;
       var first = data && data[0] || {};
-      if (first.ref && first.ref.iframe) {
-        openSiteFrame(first.ref.iframe);
-        component.loading(false);
-        return;
-      }
       if (first.ref && first.ref.href) {
-        loadPage(first.ref.href, first.ref.title || first.title);
+        loadPage(first.ref.href);
         return;
       }
       doSearch(first.title || object.movie && (object.movie.title || object.movie.name) || '');
