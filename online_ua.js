@@ -1824,6 +1824,7 @@
       voice_name: ''
     };
     var voices = [];
+    var lastCards = [];
     function useful(str, kind) {
       str = str || '';
       if (str.indexOf('Just a moment') !== -1 || str.indexOf('_cf_chl_opt') !== -1) return false;
@@ -1862,10 +1863,9 @@
             'X-Return-Format': 'html'
           }
         });
-        list.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
       }
       if (kind === 'player') {
-        list.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
+        if (hasNative()) list.push(url);
       }
       return list;
     }
@@ -2140,7 +2140,8 @@
       return out;
     }
     function showCards(cards) {
-      if (!cards.length) {
+      lastCards = cards || [];
+      if (!lastCards.length) {
         component.empty();
         return;
       }
@@ -2164,26 +2165,29 @@
       found = (html || '').match(/\/\/hdvbua\.pro\/embed\/[^\s"'<>]+/i);
       return found ? 'https:' + found[0].replace(/&amp;/g, '&') : '';
     }
+    function restoreCards() {
+      if (lastCards.length) showCards(lastCards);else component.empty();
+    }
     function loadPage(href, title) {
       component.loading(true);
       getText(href, 'page', function (html) {
         var embed = findEmbed(html);
         if (!embed) {
-          component.empty();
+          restoreCards();
           return;
         }
         getText(embed, 'player', function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
-            component.empty();
+            restoreCards();
             return;
           }
           showEpisodes();
         }, function () {
-          component.empty();
+          restoreCards();
         });
       }, function () {
-        component.empty();
+        restoreCards();
       });
     }
     function doSearch(title) {
@@ -3910,7 +3914,7 @@
     }
     var manifest = {
       type: 'video',
-      version: '2.9.2',
+      version: '2.9.3',
       name: 'Онлайн UA',
       //description: 'Плагин для просмотра онлайн сериалов и фильмов',
       component: 'bandera_online',
