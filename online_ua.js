@@ -1425,7 +1425,7 @@
     return Lampa.Utils.hash(season ? [season, episode, title, vn].join('') : title + vn);
   }
 
-  function openSiteFrame(url) {
+  function openSiteFrame(url, onClose) {
     $('.online-ua-frame').remove();
     var root = $('<div class="online-ua-frame"></div>');
     root.css({
@@ -1468,6 +1468,7 @@
     function shut() {
       root.remove();
       Lampa.Controller.toggle(prev);
+      if (typeof onClose === 'function') onClose();
     }
     close.on('hover:enter click', shut);
     Lampa.Controller.add('online_ua_frame', {
@@ -1856,17 +1857,6 @@
         list.push('https://r.jina.ai/' + url);
         list.push('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
       }
-      if (kind === 'page') {
-        list.push({
-          url: 'https://r.jina.ai/' + url,
-          headers: {
-            'X-Return-Format': 'html'
-          }
-        });
-      }
-      if (kind === 'player') {
-        if (hasNative()) list.push(url);
-      }
       return list;
     }
     function getText(url, kind, ok, fail) {
@@ -2168,26 +2158,38 @@
     function restoreCards() {
       if (lastCards.length) showCards(lastCards);else component.empty();
     }
+    function playMoviePage(href) {
+      component.loading(false);
+      openSiteFrame(href, restoreCards);
+    }
     function loadPage(href, title) {
+      if (!href) {
+        restoreCards();
+        return;
+      }
+      if (!hasNative()) {
+        playMoviePage(href);
+        return;
+      }
       component.loading(true);
       getText(href, 'page', function (html) {
         var embed = findEmbed(html);
         if (!embed) {
-          restoreCards();
+          playMoviePage(href);
           return;
         }
         getText(embed, 'player', function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
-            restoreCards();
+            playMoviePage(href);
             return;
           }
           showEpisodes();
         }, function () {
-          restoreCards();
+          playMoviePage(href);
         });
       }, function () {
-        restoreCards();
+        playMoviePage(href);
       });
     }
     function doSearch(title) {
@@ -3914,7 +3916,7 @@
     }
     var manifest = {
       type: 'video',
-      version: '2.9.3',
+      version: '2.9.4',
       name: 'Онлайн UA',
       //description: 'Плагин для просмотра онлайн сериалов и фильмов',
       component: 'bandera_online',
