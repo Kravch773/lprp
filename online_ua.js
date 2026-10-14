@@ -1845,17 +1845,28 @@
     function proxyTargets(url, kind) {
       var list = [];
       if (hasNative()) list.push(url);
-      if (kind !== 'player') {
+      if (kind === 'search') {
         list.push({
           url: 'https://r.jina.ai/' + url,
           headers: {
             'X-Return-Format': 'html'
           }
         });
+        list.push('https://r.jina.ai/' + url);
+        list.push('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
       }
-      list.push('https://cors.redoc.ly/' + url);
-      list.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
-      if (kind === 'search') list.push('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+      if (kind === 'page') {
+        list.push({
+          url: 'https://r.jina.ai/' + url,
+          headers: {
+            'X-Return-Format': 'html'
+          }
+        });
+        list.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
+      }
+      if (kind === 'player') {
+        list.push('https://api.framextv.tech/api/proxy?url=' + encodeURIComponent(url));
+      }
       return list;
     }
     function getText(url, kind, ok, fail) {
@@ -1875,7 +1886,7 @@
           headers: item.headers
         };
         net.clear();
-        net.timeout(kind === 'search' ? 14000 : 10000);
+        net.timeout(kind === 'search' ? 16000 : 10000);
         net.native(target, function (str) {
           if (!useful(str, kind)) {
             if (i < targets.length) next();else fail();
@@ -2153,7 +2164,7 @@
       found = (html || '').match(/\/\/hdvbua\.pro\/embed\/[^\s"'<>]+/i);
       return found ? 'https:' + found[0].replace(/&amp;/g, '&') : '';
     }
-    function loadPage(href) {
+    function loadPage(href, title) {
       component.loading(true);
       getText(href, 'page', function (html) {
         var embed = findEmbed(html);
@@ -2169,10 +2180,10 @@
           }
           showEpisodes();
         }, function () {
-          component.doesNotAnswer();
+          component.empty();
         });
       }, function () {
-        component.doesNotAnswer();
+        component.empty();
       });
     }
     function doSearch(title) {
@@ -2185,7 +2196,7 @@
       voices = [];
       getText(searchUrl(title), 'search', function (html) {
         var cards = parseCards(html);
-        if (!cards.length) component.empty();else if (cards.length === 1) loadPage(cards[0].href);else showCards(cards);
+        if (!cards.length) component.empty();else showCards(cards);
       }, function () {
         component.doesNotAnswer();
       });
@@ -2198,7 +2209,7 @@
       object = obj;
       var first = data && data[0] || {};
       if (first.ref && first.ref.href) {
-        loadPage(first.ref.href);
+        loadPage(first.ref.href, first.ref.title || first.title);
         return;
       }
       doSearch(first.title || object.movie && (object.movie.title || object.movie.name) || '');
