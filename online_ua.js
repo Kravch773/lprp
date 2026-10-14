@@ -1425,7 +1425,8 @@
     return Lampa.Utils.hash(season ? [season, episode, title, vn].join('') : title + vn);
   }
 
-  function openSiteFrame(url, onClose) {
+  function openSiteFrame(url, onClose, opts) {
+    opts = opts || {};
     $('.online-ua-frame').remove();
     var root = $('<div class="online-ua-frame"></div>');
     root.css({
@@ -1435,14 +1436,27 @@
       right: 0,
       bottom: 0,
       zIndex: 99999,
-      background: '#000'
+      background: '#000',
+      overflow: 'hidden'
     });
     var frame = $('<iframe allowfullscreen></iframe>');
+    if (opts.crop && url && url.indexOf('#') === -1) url += '#tabs_box';
     frame.attr({
       src: url,
-      allow: 'autoplay; fullscreen; encrypted-media; picture-in-picture'
+      allow: 'autoplay; fullscreen; encrypted-media; picture-in-picture',
+      scrolling: opts.crop ? 'no' : 'auto'
     });
-    frame.css({
+    frame.css(opts.crop ? {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: '50%',
+      width: '100%',
+      height: '80vh',
+      border: 0,
+      display: 'block',
+      transform: 'translateY(-50%)'
+    } : {
       width: '100%',
       height: '100%',
       border: 0,
@@ -2028,6 +2042,12 @@
       component.draw(drawn, {
         onEnter: function onEnter(item) {
           if (item.mark) item.mark();
+          if (item.ref.frame) {
+            openSiteFrame(item.ref.file, null, {
+              crop: item.ref.frame === 'crop'
+            });
+            return;
+          }
           var playlist = drawn.map(function (entry) {
             var cell = {
               title: entry.title,
@@ -2158,38 +2178,52 @@
     function restoreCards() {
       if (lastCards.length) showCards(lastCards);else component.empty();
     }
-    function playMoviePage(href) {
-      component.loading(false);
-      openSiteFrame(href, restoreCards);
+    function playerHref(href) {
+      if (!href) return href;
+      return href.indexOf('#') === -1 ? href + '#tabs_box' : href;
+    }
+    function showWatch(title, href) {
+      voices = [{
+        name: 'Eneyida',
+        episodes: [{
+          season: 0,
+          episode: 0,
+          file: playerHref(href),
+          title: title || 'Дивитись',
+          subtitle: '',
+          frame: 'crop'
+        }]
+      }];
+      showEpisodes();
     }
     function loadPage(href, title) {
       if (!href) {
         restoreCards();
         return;
       }
+      component.loading(true);
       if (!hasNative()) {
-        playMoviePage(href);
+        showWatch(title, href);
         return;
       }
-      component.loading(true);
       getText(href, 'page', function (html) {
         var embed = findEmbed(html);
         if (!embed) {
-          playMoviePage(href);
+          showWatch(title, href);
           return;
         }
         getText(embed, 'player', function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
-            playMoviePage(href);
+            showWatch(title, href);
             return;
           }
           showEpisodes();
         }, function () {
-          playMoviePage(href);
+          showWatch(title, href);
         });
       }, function () {
-        playMoviePage(href);
+        showWatch(title, href);
       });
     }
     function doSearch(title) {
@@ -3916,7 +3950,7 @@
     }
     var manifest = {
       type: 'video',
-      version: '2.9.4',
+      version: '2.9.5',
       name: 'Онлайн UA',
       //description: 'Плагин для просмотра онлайн сериалов и фильмов',
       component: 'bandera_online',
