@@ -2042,12 +2042,6 @@
       component.draw(drawn, {
         onEnter: function onEnter(item) {
           if (item.mark) item.mark();
-          if (item.ref.frame) {
-            openSiteFrame(item.ref.file, null, {
-              crop: item.ref.frame === 'crop'
-            });
-            return;
-          }
           var playlist = drawn.map(function (entry) {
             var cell = {
               title: entry.title,
@@ -2178,52 +2172,38 @@
     function restoreCards() {
       if (lastCards.length) showCards(lastCards);else component.empty();
     }
-    function playerHref(href) {
-      if (!href) return href;
-      return href.indexOf('#') === -1 ? href + '#tabs_box' : href;
-    }
-    function showWatch(title, href) {
-      voices = [{
-        name: 'Eneyida',
-        episodes: [{
-          season: 0,
-          episode: 0,
-          file: playerHref(href),
-          title: title || 'Дивитись',
-          subtitle: '',
-          frame: 'crop'
-        }]
-      }];
-      showEpisodes();
+    function cannotPlay() {
+      restoreCards();
+      component.pushError('Eneyida не віддає потік у плеєр Lampa. Оберіть UAflix.');
     }
     function loadPage(href, title) {
       if (!href) {
         restoreCards();
         return;
       }
-      component.loading(true);
       if (!hasNative()) {
-        showWatch(title, href);
+        cannotPlay();
         return;
       }
+      component.loading(true);
       getText(href, 'page', function (html) {
         var embed = findEmbed(html);
         if (!embed) {
-          showWatch(title, href);
+          cannotPlay();
           return;
         }
         getText(embed, 'player', function (player) {
           voices = parsePlaylist(player);
           if (!voices.length) {
-            showWatch(title, href);
+            cannotPlay();
             return;
           }
           showEpisodes();
         }, function () {
-          showWatch(title, href);
+          cannotPlay();
         });
       }, function () {
-        showWatch(title, href);
+        cannotPlay();
       });
     }
     function doSearch(title) {
@@ -3950,7 +3930,7 @@
     }
     var manifest = {
       type: 'video',
-      version: '2.9.5',
+      version: '2.9.6',
       name: 'Онлайн UA',
       //description: 'Плагин для просмотра онлайн сериалов и фильмов',
       component: 'bandera_online',
